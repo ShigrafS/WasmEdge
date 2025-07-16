@@ -50,8 +50,8 @@ RUN cmake -G Ninja ../llvm \
   -DZLIB_LIBRARY=/lib/libz.a \
   -DZLIB_INCLUDE_DIR=/usr/include
 
-# Build only lld static libs
-RUN ninja install-lld
+RUN mkdir -p /lld-install/lib
+RUN cp lib/liblld*.a /lld-install/lib/
 
 # Install lld static libs into /lld-install
 RUN mkdir -p /lld-install/lib /lld-install/bin
