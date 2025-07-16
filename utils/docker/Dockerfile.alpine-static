@@ -42,7 +42,7 @@ RUN apk add git llvm-dev
 RUN xx-apk add \
     g++ \
     llvm-dev llvm-static \
-    lld lld-dev lld-static \
+    lld lld-dev \
     zlib-dev zlib-static
 
 # Fix LLVMConfig.cmake to account for the sysroot
