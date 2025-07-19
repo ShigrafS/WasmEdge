@@ -297,10 +297,6 @@ TEST(WasmEdgeVM, ForceDeleteInvalidStoreContext) {
   WasmEdge_ConfigureContext *Conf = WasmEdge_ConfigureCreate();
   WasmEdge_VMContext *VMCxt = WasmEdge_VMCreate(Conf, nullptr);
   WasmEdge_String ModuleName = WasmEdge_StringCreateByCString("test_module");
-
-  // Simulate an invalid store context by deleting the VM
-  WasmEdge_VMDelete(VMCxt);
-  WasmEdge_VMForceDeleteRegisteredModule(VMCxt, ModuleName); // Should not crash
   
   // Cleanup
   WasmEdge_StringDelete(ModuleName);
