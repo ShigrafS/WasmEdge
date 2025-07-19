@@ -1,0 +1,21 @@
+name: Trigger Build on MacOS
+
+on:
+  push:
+    branches:
+      - main # or use ["**"] to run on all branches
+
+permissions:
+  contents: write
+
+jobs:
+  build-on-macos:
+    uses: ./.github/workflows/reusable-build-on-macos.yml
+    with:
+      version: "0.14.1" # or ${{ github.ref_name }}
+      matrix: |
+        [
+          { "name": "macOS 13 x86", "runner": "macos-13", "darwin_version": "13", "arch": "x86_64" },
+          { "name": "macOS 14 ARM", "runner": "macos-14", "darwin_version": "14", "arch": "aarch64" }
+        ]
+      release: false
