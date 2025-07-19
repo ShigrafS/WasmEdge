@@ -293,15 +293,7 @@ TEST(WasmEdgeVM, ForceDeleteInvalidInput) {
   WasmEdge_ConfigureDelete(Conf);
 }
 
-TEST(WasmEdgeVM, ForceDeleteInvalidStoreContext) {
-  WasmEdge_ConfigureContext *Conf = WasmEdge_ConfigureCreate();
-  WasmEdge_VMContext *VMCxt = WasmEdge_VMCreate(Conf, nullptr);
-  WasmEdge_String ModuleName = WasmEdge_StringCreateByCString("test_module");
-  
-  // Cleanup
-  WasmEdge_StringDelete(ModuleName);
-  WasmEdge_ConfigureDelete(Conf);
-}
+
 
 } // namespace
 
