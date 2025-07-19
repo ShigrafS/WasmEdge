@@ -100,14 +100,18 @@ public:
 
   /// Unregister a named module from this store.
   Expect<void> unregisterModule(std::string_view Name) {
+  fprintf(stderr, "Attempting to unregister module: %s\n", Name.data());
   try {
     std::unique_lock Lock(Mutex);
+    fprintf(stderr, "Mutex locked for module: %s\n", Name.data());
     auto Iter = NamedMod.find(Name);
     if (Iter == NamedMod.cend()) {
+      fprintf(stderr, "Module not found: %s\n", Name.data());
       return Unexpect(ErrCode::Value::UnknownImport);
     }
     (const_cast<Instance::ModuleInstance *>(Iter->second))->unlinkStore(this);
     NamedMod.erase(Iter);
+    fprintf(stderr, "Module unregistered successfully: %s\n", Name.data());
     return {};
   } catch (const std::system_error& e) {
     fprintf(stderr, "Mutex lock failed in unregisterModule: %s\n", e.what());

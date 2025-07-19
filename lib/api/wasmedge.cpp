@@ -3110,7 +3110,7 @@ void WasmEdge_VMForceDeleteRegisteredModule(const WasmEdge_VMContext *Cxt,
     fprintf(stderr, "Invalid input: Cxt=%p, ModuleName.Buf=%p\n", Cxt, ModuleName.Buf);
     return; // Invalid input
   }
-
+  
   // Cast away const to match WasmEdge_VMGetStoreContext signature
   WasmEdge_StoreContext *StoreCxt =
       WasmEdge_VMGetStoreContext(const_cast<WasmEdge_VMContext *>(Cxt));
@@ -3118,16 +3118,22 @@ void WasmEdge_VMForceDeleteRegisteredModule(const WasmEdge_VMContext *Cxt,
     fprintf(stderr, "Invalid store context: StoreCxt=%p\n", StoreCxt);
     return; // Invalid store context
   }
-  
+  // Additional check to avoid accessing invalid store context
   const WasmEdge_ModuleInstanceContext *ModInst =
       WasmEdge_StoreFindModule(StoreCxt, ModuleName);
-  if (ModInst) {
-    fprintf(stderr, "Unregistering module: %s\n", ModuleName.Buf);
-    fromStoreCxt(StoreCxt)->unregisterModule(genStrView(ModuleName));
-    fprintf(stderr, "Deleting module instance: %p\n", ModInst);
-    WasmEdge_ModuleInstanceDelete(
-        const_cast<WasmEdge_ModuleInstanceContext *>(ModInst));
+  if (!ModInst) {
+    fprintf(stderr, "Module not found or store context invalid: %s\n", ModuleName.Buf);
+    return; // No module found or store context is invalid
   }
+  fprintf(stderr, "Unregistering module: %s\n", ModuleName.Buf);
+  auto Result = fromStoreCxt(StoreCxt)->unregisterModule(genStrView(ModuleName));
+  if (!Result) {
+    fprintf(stderr, "Failed to unregister module: %s\n", ModuleName.Buf);
+    return; // Unregister failed, skip deletion to avoid undefined behavior
+  }
+  fprintf(stderr, "Deleting module instance: %p\n", ModInst);
+  WasmEdge_ModuleInstanceDelete(
+      const_cast<WasmEdge_ModuleInstanceContext *>(ModInst));
 }
 
 WASMEDGE_CAPI_EXPORT uint32_t
