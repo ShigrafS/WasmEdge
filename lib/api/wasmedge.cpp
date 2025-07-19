@@ -3111,25 +3111,26 @@ void WasmEdge_VMForceDeleteRegisteredModule(const WasmEdge_VMContext *Cxt,
     return; // Invalid input
   }
 
-  // Check if the VM context is valid (not deleted)
-  if (Cxt->Store == nullptr) {
-    fprintf(stderr, "Invalid VM context: Store is null\n");
-    return; // Invalid VM context
-  }
-
   WasmEdge_StoreContext *StoreCxt =
       WasmEdge_VMGetStoreContext(const_cast<WasmEdge_VMContext *>(Cxt));
   if (!StoreCxt) {
     fprintf(stderr, "Invalid store context: StoreCxt=%p\n", StoreCxt);
     return; // Invalid store context
   }
-  
+
+  // Check if the store context is valid by probing with an empty module name
+  if (WasmEdge_StoreFindModule(StoreCxt, WasmEdge_StringCreateByCString("")) == nullptr) {
+    fprintf(stderr, "Store context is invalid\n");
+    return; // Store context is invalid
+  }
+
   const WasmEdge_ModuleInstanceContext *ModInst =
       WasmEdge_StoreFindModule(StoreCxt, ModuleName);
   if (!ModInst) {
-    fprintf(stderr, "Module not found or store context invalid: %s\n", ModuleName.Buf);
-    return; // No module found or store context is invalid
+    fprintf(stderr, "Module not found: %s\n", ModuleName.Buf);
+    return; // No module found
   }
+
   fprintf(stderr, "Unregistering module: %s\n", ModuleName.Buf);
   auto Result = fromStoreCxt(StoreCxt)->unregisterModule(genStrView(ModuleName));
   if (!Result) {
