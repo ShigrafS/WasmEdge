@@ -3106,21 +3106,25 @@ WASMEDGE_CAPI_EXPORT void WasmEdge_VMCleanup(WasmEdge_VMContext *Cxt) {
 
 void WasmEdge_VMForceDeleteRegisteredModule(const WasmEdge_VMContext *Cxt,
                                             const WasmEdge_String ModuleName) {
-  if (!Cxt || !ModuleName.Buf || !Cxt->Store) {
-    return; // Invalid input or deleted VM context
+  if (!Cxt || !ModuleName.Buf) {
+    fprintf(stderr, "Invalid input: Cxt=%p, ModuleName.Buf=%p\n", Cxt, ModuleName.Buf);
+    return; // Invalid input
   }
 
   // Cast away const to match WasmEdge_VMGetStoreContext signature
   WasmEdge_StoreContext *StoreCxt =
       WasmEdge_VMGetStoreContext(const_cast<WasmEdge_VMContext *>(Cxt));
   if (!StoreCxt) {
+    fprintf(stderr, "Invalid store context: StoreCxt=%p\n", StoreCxt);
     return; // Invalid store context
   }
   
   const WasmEdge_ModuleInstanceContext *ModInst =
       WasmEdge_StoreFindModule(StoreCxt, ModuleName);
   if (ModInst) {
+    fprintf(stderr, "Unregistering module: %s\n", ModuleName.Buf);
     fromStoreCxt(StoreCxt)->unregisterModule(genStrView(ModuleName));
+    fprintf(stderr, "Deleting module instance: %p\n", ModInst);
     WasmEdge_ModuleInstanceDelete(
         const_cast<WasmEdge_ModuleInstanceContext *>(ModInst));
   }
