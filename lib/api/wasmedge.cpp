@@ -3106,8 +3106,8 @@ WASMEDGE_CAPI_EXPORT void WasmEdge_VMCleanup(WasmEdge_VMContext *Cxt) {
 
 void WasmEdge_VMForceDeleteRegisteredModule(const WasmEdge_VMContext *Cxt,
                                             const WasmEdge_String ModuleName) {
-  if (!Cxt || !ModuleName.Buf) {
-    return; // Invalid input
+  if (!Cxt || !ModuleName.Buf || !Cxt->Store) {
+    return; // Invalid input or deleted VM context
   }
 
   // Cast away const to match WasmEdge_VMGetStoreContext signature
@@ -3116,7 +3116,7 @@ void WasmEdge_VMForceDeleteRegisteredModule(const WasmEdge_VMContext *Cxt,
   if (!StoreCxt) {
     return; // Invalid store context
   }
-
+  
   const WasmEdge_ModuleInstanceContext *ModInst =
       WasmEdge_StoreFindModule(StoreCxt, ModuleName);
   if (ModInst) {
