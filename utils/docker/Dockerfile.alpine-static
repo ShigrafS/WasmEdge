@@ -48,8 +48,8 @@ RUN xx-apk add \
 # Fix LLVMConfig.cmake to account for the sysroot
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake
 
-# COPY lld static libs FROM the external lld-static image
-COPY --from=wasmedge/lld-static:alpine3.22 /lld-install/lib/liblld*.a $(xx-info sysroot)/usr/lib/llvm*/lib/
+#  Changed to use locally built stage from Dockerfile.lld-static
+COPY --from=lld /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
 
 # Use the native version of llvm-config
 RUN ! xx-info is-cross || cp -f /usr/lib/llvm*/bin/llvm-config $(xx-info sysroot)usr/lib/llvm*/bin/llvm-config
