@@ -27,6 +27,10 @@ RUN git clone --depth=1 https://github.com/llvm/llvm-project.git
 
 WORKDIR /lld-build/llvm-project/build
 
+# Set Clang as the compiler
+ENV CC=clang
+ENV CXX=clang++
+
 # Configure LLVM build with lld static libs enabled
 RUN cmake -G Ninja ../llvm \
   -DLLVM_ENABLE_PROJECTS="lld" \
@@ -38,7 +42,7 @@ RUN cmake -G Ninja ../llvm \
   -DLLVM_TARGETS_TO_BUILD="X86;AArch64;ARM" \
   -DLLVM_BUILD_LLVM_DYLIB=OFF \
   -DLLVM_LINK_LLVM_DYLIB=OFF \
-  -DLLVM_INCLUDE_TOOLS=OFF \
+  -DLLVM_INCLUDE_TOOLS=ON \
   -DLLVM_BUILD_STATIC=ON \
   -DLLVM_BUILD_SHARED_LIBS=OFF \
   -DLLVM_ENABLE_THREADS=OFF \
