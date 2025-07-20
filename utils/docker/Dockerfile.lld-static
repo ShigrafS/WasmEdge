@@ -50,15 +50,13 @@ RUN cmake -G Ninja ../llvm \
   -DZLIB_LIBRARY=/lib/libz.a \
   -DZLIB_INCLUDE_DIR=/usr/include
 
-RUN mkdir -p /lld-install/lib
-RUN cp lib/liblld*.a /lld-install/lib/
-
-# Install lld static libs into /lld-install
-RUN mkdir -p /lld-install/lib /lld-install/bin
+# Build and install lld
 RUN ninja install-lld
 
-# Copy lld static libs and binaries to /lld-install for later reuse
-RUN cp /lld-build/llvm-project/build/lib/liblld*.a /lld-install/lib/
+# Copy static libraries to /lld-install
+RUN mkdir -p /lld-install/lib /lld-install/bin && \
+    cp lib/liblld*.a /lld-install/lib/ && \
+    cp bin/lld* /lld-install/bin/
 
 WORKDIR /
 
@@ -67,7 +65,7 @@ FROM alpine:${ALPINE_VERSION} AS lld-static
 
 COPY --from=base /lld-install /lld-install
 
-# (Optional) Add lld binaries if you want to use lld linker tools
+# Add lld binaries to PATH (optional)
 ENV PATH="/lld-install/bin:${PATH}"
 
 CMD ["/bin/sh"]
