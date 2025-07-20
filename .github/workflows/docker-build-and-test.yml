@@ -14,9 +14,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Set up Docker Buildx for multi-platform builds
+      # Set up Docker Buildx with container driver for caching support
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+          buildkitd-flags: --debug
 
       # Cache Docker layers to speed up builds
       - name: Cache Docker layers
@@ -30,21 +33,23 @@ jobs:
       # Build the lld-static image
       - name: Build lld-static image
         run: |
-          docker build \
+          docker buildx build \
             --tag wasmedge/lld-static:alpine3.22 \
             --file utils/docker/Dockerfile.lld-static \
             --cache-from=type=local,src=/tmp/.buildx-cache \
             --cache-to=type=local,dest=/tmp/.buildx-cache \
+            --load \
             .
 
       # Build the alpine-static image
       - name: Build alpine-static image
         run: |
-          docker build \
+          docker buildx build \
             --tag wasmedge/alpine-static:3.22 \
             --file utils/docker/Dockerfile.alpine-static \
             --cache-from=type=local,src=/tmp/.buildx-cache \
             --cache-to=type=local,dest=/tmp/.buildx-cache \
+            --load \
             .
 
       # Run WasmEdge tests (placeholder; replace with actual test command)
