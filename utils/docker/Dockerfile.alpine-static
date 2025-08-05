@@ -1,116 +1,104 @@
 # syntax=docker/dockerfile:1.5-labs
 
 ARG ALPINE_VERSION=3.22
-ARG XX_VERSION=1.2.1
 
-#### --- Stage 1: Build static LLD from source --- ####
+########################################
+# Stage 1: xx (cross-compilation tool)
+########################################
+FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
+
+########################################
+# Stage 2: Build LLD from LLVM source
+########################################
 FROM alpine:${ALPINE_VERSION} AS lld-builder
 
 RUN apk add --no-cache \
-    bash cmake ninja clang llvm-dev llvm-static lld-dev \
-    git musl-dev zlib-dev zlib-static libc-dev libffi-dev
+    bash \
+    cmake \
+    ninja \
+    clang \
+    llvm-dev \
+    llvm-static \
+    lld-dev \
+    git \
+    musl-dev \
+    zlib-dev \
+    zlib-static \
+    libc-dev \
+    libffi-dev \
+    curl \
+    tar \
+    xz
 
 WORKDIR /lld-build
-RUN git clone --depth=1 https://github.com/llvm/llvm-project.git
 
-WORKDIR /lld-build/llvm-project/build
-ENV CC=clang
-ENV CXX=clang++
-RUN cmake -G Ninja ../llvm \
-  -DLLVM_ENABLE_PROJECTS="lld" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DLLVM_ENABLE_RTTI=ON \
-  -DLLVM_ENABLE_EH=ON \
-  -DLLVM_ENABLE_LLD=ON \
-  -DLLVM_ENABLE_LTO=OFF \
-  -DLLVM_TARGETS_TO_BUILD="X86;AArch64;ARM" \
-  -DLLVM_BUILD_LLVM_DYLIB=OFF \
-  -DLLVM_LINK_LLVM_DYLIB=OFF \
-  -DLLVM_INCLUDE_TOOLS=ON \
-  -DLLVM_BUILD_STATIC=ON \
-  -DLLVM_BUILD_SHARED_LIBS=OFF \
-  -DLLVM_ENABLE_THREADS=OFF \
-  -DLLVM_ENABLE_ZLIB=ON \
-  -DLLVM_INCLUDE_TESTS=OFF \
-  -DLLVM_INCLUDE_UTILS=OFF \
-  -DLLVM_INCLUDE_EXAMPLES=OFF \
-  -DLLVM_INCLUDE_DOCS=OFF \
-  -DZLIB_LIBRARY=/lib/libz.a \
-  -DZLIB_INCLUDE_DIR=/usr/include
+RUN git clone --depth=1 --branch=release/18.x https://github.com/llvm/llvm-project.git
 
-RUN ninja install-lld
+WORKDIR /lld-build/llvm-project
 
-RUN mkdir -p /lld-install/lib /lld-install/bin && \
-    cp lib/liblld*.a /lld-install/lib/ && \
-    cp bin/lld* /lld-install/bin/
+RUN cmake -B build \
+    -G Ninja \
+    -DLLVM_ENABLE_PROJECTS="lld" \
+    -DLLVM_TARGETS_TO_BUILD="X86;WebAssembly" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/lld-install \
+    -DLLVM_ENABLE_ASSERTIONS=OFF \
+    llvm
 
-#### --- Stage 2: Prepare xx and base image --- ####
-FROM --platform=$BUILDPLATFORM tonistiigi/xx:${XX_VERSION} AS xx
-FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS base
+RUN cmake --build build --target lld
+RUN cmake --install build
+
+########################################
+# Stage 3: Alpine Static Image with LLD
+########################################
+FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS alpine-static
+
+LABEL maintainer="you@example.com"
+LABEL description="Alpine ${ALPINE_VERSION} with LLD and static toolchain"
+
 COPY --from=xx / /
-RUN apk add --no-cache bash cmake ninja g++ clang
 
-SHELL [ "bash", "-c" ]
-RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod a+x /usr/bin/xx-toolchain
+# Install bash so we can use SHELL
+RUN apk add --no-cache bash
+
+# Set bash for all future RUN commands
+SHELL ["bash", "-c"]
+
+# Install static toolchain and build dependencies
+RUN apk add --no-cache \
+    cmake \
+    samurai \
+    g++ \
+    clang \
+    llvm-static \
+    lld-dev \
+    zlib-static \
+    zlib-dev \
+    git \
+    musl-dev \
+    libc-dev \
+    libffi-dev
+
+# Copy LLD libraries and binaries from builder
+COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
+COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
+
+# Patch LLVMConfig for proper sysroot awareness
+RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
+
+# Add xx-toolchain shortcut script
+RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 #!/bin/bash
 mkdir -p /etc/xx-toolchains/
-TOOLCHAIN_FILE="/etc/xx-toolchains/${TARGETPLATFORM}.cmake"
-cat <<EOF > "$TOOLCHAIN_FILE"
-set(CMAKE_SYSTEM_NAME Linux)
-set(CMAKE_SYSTEM_PROCESSOR $(xx-clang --print-target-triple | cut -d- -f1))
-set(CMAKE_C_COMPILER clang)
-set(CMAKE_CXX_COMPILER clang++)
-set(CMAKE_FIND_ROOT_PATH $(xx-info sysroot))
-set(CMAKE_SYSROOT $(xx-info sysroot))
-set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
-EOF
+TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-info triple).cmake"
+if [ ! -f "$TOOLCHAIN_FILE" ]; then
+  xx-clang --cmake-toolchain "$TOOLCHAIN_FILE"
+fi
 echo "$TOOLCHAIN_FILE"
 EOT
 
-#### --- Stage 3: Build WasmEdge statically with LLD --- ####
-FROM base AS build
-ARG TARGETPLATFORM
+# Optional: Working directory if you plan to mount source code
+WORKDIR /src
 
-# Add static LLD from previous stage
-COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
-COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
-ENV PATH="/usr/bin:$PATH"
-
-RUN apk add --no-cache git llvm-static zlib-static zlib-dev
-
-# Fix LLVMConfig for sysroot
-RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake
-RUN ! xx-info is-cross || cp -f /usr/lib/llvm*/bin/llvm-config $(xx-info sysroot)usr/lib/llvm*/bin/llvm-config
-
-# Build WasmEdge
-WORKDIR /work
-COPY . /src
-RUN --mount=type=bind,target=/src,source=. \
-    cmake -S /src -B /build -G Ninja \
-        -DCMAKE_BUILD_TYPE=MinSizeRel \
-        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-        -DCMAKE_INSTALL_PREFIX="/install" \
-        -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
-        -DWASMEDGE_BUILD_PACKAGE="TGZ" \
-        -DWASMEDGE_USE_LLVM=ON \
-        -DWASMEDGE_BUILD_STATIC_LIB=ON \
-        -DWASMEDGE_BUILD_SHARED_LIB=OFF \
-        -DWASMEDGE_BUILD_TESTS=OFF \
-        -DWASMEDGE_BUILD_TOOLS=OFF \
-        -DWASMEDGE_BUILD_PLUGINS=OFF \
-        -DWASMEDGE_BUILD_EXAMPLE=OFF \
-        -DWASMEDGE_LINK_LLVM_STATIC=ON \
-        -DWASMEDGE_LINK_TOOLS_STATIC=ON \
-        -DWASMEDGE_DISABLE_LIBTINFO=ON \
-        -DCMAKE_LINKER=/usr/bin/lld \
-        -DLLVM_USE_LINKER=lld
-
-RUN cmake --build /build -- install package
-
-#### --- Stage 4: Output image (fully static) --- ####
-FROM scratch AS final
-COPY --from=build /install /install
-COPY --from=build /build/WasmEdge-*.tar.gz /WasmEdge-static.tar.gz
+# Optional: Default command
+CMD ["/bin/bash"]
