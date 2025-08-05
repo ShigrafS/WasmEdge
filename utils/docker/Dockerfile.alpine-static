@@ -46,7 +46,7 @@ RUN cmake -B build \
     llvm
 
 RUN cmake --build build --target lld
-RUN cmake --install build
+RUN cmake --install build --prefix /lld-install
 
 ########################################
 # Stage 3: Alpine Static Image with LLD
