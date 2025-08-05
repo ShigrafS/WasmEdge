@@ -30,23 +30,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildx-
 
-      # Build the lld-static image
-      - name: Build lld-static image
-        run: |
-          docker buildx build \
-            --tag wasmedge/lld-static:alpine3.22 \
-            --file utils/docker/Dockerfile.lld-static \
-            --cache-from=type=local,src=/tmp/.buildx-cache \
-            --cache-to=type=local,dest=/tmp/.buildx-cache \
-            --load \
-            .
-
-      # Build the alpine-static image
+      # Build the alpine-static image FIRST
       - name: Build alpine-static image
         run: |
           docker buildx build \
             --tag wasmedge/alpine-static:3.22 \
             --file utils/docker/Dockerfile.alpine-static \
+            --cache-from=type=local,src=/tmp/.buildx-cache \
+            --cache-to=type=local,dest=/tmp/.buildx-cache \
+            --load \
+            .
+
+      # Build the lld-static image SECOND
+      - name: Build lld-static image
+        run: |
+          docker buildx build \
+            --tag wasmedge/lld-static:alpine3.22 \
+            --file utils/docker/Dockerfile.lld-static \
             --cache-from=type=local,src=/tmp/.buildx-cache \
             --cache-to=type=local,dest=/tmp/.buildx-cache \
             --load \
