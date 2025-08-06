@@ -42,10 +42,11 @@ RUN cmake -B build \
     -DLLVM_TARGETS_TO_BUILD="X86;WebAssembly" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/lld-install \
+    -DCMAKE_INSTALL_LIBDIR=lib \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
     llvm
 
-RUN cmake --build build --target install-lld
+RUN cmake --build build --target install
 
 ########################################
 # Stage 3: Alpine Static Image with LLD
@@ -78,7 +79,10 @@ RUN apk add --no-cache \
     libc-dev \
     libffi-dev
 
-# Copy LLD libraries and binaries from builder
+# Ensure destination lib dir exists
+RUN mkdir -p /usr/lib/llvm/lib
+
+# Copy LLD static libraries and binaries from builder
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
 COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
 
