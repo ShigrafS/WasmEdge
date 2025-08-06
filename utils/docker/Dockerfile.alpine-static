@@ -45,8 +45,7 @@ RUN cmake -B build \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
     llvm
 
-RUN cmake --build build --target lld
-RUN cmake --install build --prefix /lld-install
+RUN cmake --build build --target install-lld
 
 ########################################
 # Stage 3: Alpine Static Image with LLD
