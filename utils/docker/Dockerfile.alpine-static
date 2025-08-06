@@ -79,7 +79,7 @@ RUN apk add --no-cache \
     libffi-dev
 
 # Copy LLD libraries and binaries from builder
-COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
+COPY --from=lld /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
 COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
 
 # Patch LLVMConfig for proper sysroot awareness
