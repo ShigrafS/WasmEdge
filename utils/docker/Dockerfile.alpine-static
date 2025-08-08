@@ -5,7 +5,8 @@ ARG ALPINE_VERSION=3.22
 ########################################
 # Stage 1: xx (cross-compilation tool)
 ########################################
-FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
+ARG XX_VERSION=1.2.1
+FROM --platform=$BUILDPLATFORM tonistiigi/xx:${XX_VERSION} AS xx
 
 ########################################
 # Stage 2: Build LLD from LLVM source
@@ -82,9 +83,13 @@ RUN apk add --no-cache \
 # Ensure destination lib dir exists
 RUN mkdir -p /usr/lib/llvm/lib
 
-# Copy LLD static libraries and binaries from builder
-COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
-COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
+# Copy all files from /lld-install/lib, then selectively move matching ones
+COPY --from=lld-builder /lld-install/lib/ /tmp/lld-lib/
+RUN find /tmp/lld-lib -name 'liblld*.a' -exec cp {} /usr/lib/llvm/lib/ \; || true
+
+# Copy lld binaries (wildcards with COPY are risky — better to copy the whole dir)
+COPY --from=lld-builder /lld-install/bin/ /usr/bin/
+
 
 # Patch LLVMConfig for proper sysroot awareness
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
@@ -100,8 +105,67 @@ fi
 echo "$TOOLCHAIN_FILE"
 EOT
 
-# Optional: Working directory if you plan to mount source code
-WORKDIR /src
+########################################
+# Stage 4: Build WasmEdge
+########################################
+FROM alpine-static AS builder
 
-# Optional: Default command
-CMD ["/bin/bash"]
+ARG TARGETPLATFORM
+ARG ALPINE_VERSION
+
+# Extra host tools needed for build
+RUN apk add git llvm-dev
+
+# Cross-compiled dependencies
+RUN xx-apk add \
+    g++ \
+    llvm-dev llvm-static \
+    lld lld-dev \
+    zlib-dev zlib-static
+
+# Patch LLVMConfig.cmake for sysroot
+RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake
+
+# Ensure LLD is co-located with LLVM
+RUN find $(xx-info sysroot)/usr/lib/llvm/lib/ -name 'liblld*.a' -exec cp {} $(xx-info sysroot)/usr/lib/llvm*/lib/ \; || true
+
+# Use native llvm-config if cross-compiling
+RUN ! xx-info is-cross || cp -f /usr/lib/llvm*/bin/llvm-config $(xx-info sysroot)usr/lib/llvm*/bin/llvm-config
+
+# Mount WasmEdge source and configure
+RUN --mount=type=bind,target=/src,source=. \
+    cmake -S /src -B /build -G Ninja \
+        -DCMAKE_BUILD_TYPE=MinSizeRel \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DCMAKE_INSTALL_PREFIX="/install" \
+        -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
+        -DWASMEDGE_BUILD_PACKAGE="TGZ" \
+        -DWASMEDGE_USE_LLVM=ON \
+        -DWASMEDGE_BUILD_STATIC_LIB=ON \
+        -DWASMEDGE_BUILD_TESTS=OFF \
+        -DWASMEDGE_BUILD_SHARED_LIB=OFF \
+        -DWASMEDGE_BUILD_TOOLS=OFF \
+        -DWASMEDGE_BUILD_PLUGINS=OFF \
+        -DWASMEDGE_BUILD_EXAMPLE=OFF \
+        -DWASMEDGE_LINK_LLVM_STATIC=ON \
+        -DWASMEDGE_LINK_TOOLS_STATIC=ON \
+        -DWASMEDGE_DISABLE_LIBTINFO=ON
+
+# Build and install
+RUN --mount=type=bind,target=/src,source=. \
+    cmake --build /build -- install package
+
+# Rename tarball to include Alpine version and arch
+RUN --mount=type=bind,target=/src,source=. <<EOT
+    set -ex
+    WASMEDGE_VERSION="$(cd /src && git describe --match '[0-9].[0-9]*' --tag)"
+    ARCH="$(xx-info march)"
+    ARCHIVE_TAG=${WASMEDGE_VERSION%%-*}-alpine${ALPINE_VERSION}_${ARCH}
+    mv /build/WasmEdge-*-Linux.tar.gz /build/WasmEdge-${ARCHIVE_TAG}_static.tar.gz
+EOT
+
+########################################
+# Stage 5: Final packaged output (optional)
+########################################
+FROM scratch AS tar
+COPY --from=builder /build/WasmEdge-*.tar.gz /
