@@ -59,13 +59,9 @@ LABEL description="Alpine ${ALPINE_VERSION} with LLD and static toolchain"
 
 COPY --from=xx / /
 
-# Install bash so we can use SHELL
 RUN apk add --no-cache bash
-
-# Set bash for all future RUN commands
 SHELL ["bash", "-c"]
 
-# Install static toolchain and build dependencies
 RUN apk add --no-cache \
     cmake \
     samurai \
@@ -80,27 +76,22 @@ RUN apk add --no-cache \
     libc-dev \
     libffi-dev
 
-# Ensure destination lib dir exists
 RUN mkdir -p /usr/lib/llvm/lib
 
-# Copy all files from /lld-install/lib, then selectively move matching ones
 COPY --from=lld-builder /lld-install/lib/ /tmp/lld-lib/
 RUN find /tmp/lld-lib -name 'liblld*.a' -exec cp {} /usr/lib/llvm/lib/ \; || true
 
-# Copy lld binaries (wildcards with COPY are risky — better to copy the whole dir)
 COPY --from=lld-builder /lld-install/bin/ /usr/bin/
 
-
-# Patch LLVMConfig for proper sysroot awareness
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
 
-# Add xx-toolchain shortcut script
+# Updated xx-toolchain script for newer xx versions
 RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 #!/bin/bash
 mkdir -p /etc/xx-toolchains/
 TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-info triple).cmake"
 if [ ! -f "$TOOLCHAIN_FILE" ]; then
-  xx-clang --cmake-toolchain "$TOOLCHAIN_FILE"
+  xx-clang --print-cmake-defines > "$TOOLCHAIN_FILE"
 fi
 echo "$TOOLCHAIN_FILE"
 EOT
@@ -113,26 +104,20 @@ FROM alpine-static AS builder
 ARG TARGETPLATFORM
 ARG ALPINE_VERSION
 
-# Extra host tools needed for build
 RUN apk add git llvm-dev
 
-# Cross-compiled dependencies
 RUN xx-apk add \
     g++ \
     llvm-dev llvm-static \
     lld lld-dev \
     zlib-dev zlib-static
 
-# Patch LLVMConfig.cmake for sysroot
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake
 
-# Ensure LLD is co-located with LLVM
 RUN find $(xx-info sysroot)/usr/lib/llvm/lib/ -name 'liblld*.a' -exec cp {} $(xx-info sysroot)/usr/lib/llvm*/lib/ \; || true
 
-# Use native llvm-config if cross-compiling
 RUN ! xx-info is-cross || cp -f /usr/lib/llvm*/bin/llvm-config $(xx-info sysroot)usr/lib/llvm*/bin/llvm-config
 
-# Mount WasmEdge source and configure
 RUN --mount=type=bind,target=/src,source=. \
     cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
@@ -151,11 +136,9 @@ RUN --mount=type=bind,target=/src,source=. \
         -DWASMEDGE_LINK_TOOLS_STATIC=ON \
         -DWASMEDGE_DISABLE_LIBTINFO=ON
 
-# Build and install
 RUN --mount=type=bind,target=/src,source=. \
     cmake --build /build -- install package
 
-# Rename tarball to include Alpine version and arch
 RUN --mount=type=bind,target=/src,source=. <<EOT
     set -ex
     WASMEDGE_VERSION="$(cd /src && git describe --match '[0-9].[0-9]*' --tag)"
@@ -165,7 +148,7 @@ RUN --mount=type=bind,target=/src,source=. <<EOT
 EOT
 
 ########################################
-# Stage 5: Final packaged output (optional)
+# Stage 5: Final packaged output
 ########################################
 FROM scratch AS tar
 COPY --from=builder /build/WasmEdge-*.tar.gz /
