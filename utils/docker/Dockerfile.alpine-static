@@ -5,8 +5,7 @@ ARG ALPINE_VERSION=3.22
 ########################################
 # Stage 1: xx (cross-compilation tool)
 ########################################
-ARG XX_VERSION=1.2.1
-FROM --platform=$BUILDPLATFORM tonistiigi/xx:${XX_VERSION} AS xx
+FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
 
 ########################################
 # Stage 2: Build LLD from LLVM source
@@ -50,26 +49,22 @@ RUN cmake -B build \
 RUN cmake --build build --target install
 
 ########################################
-# Stage 3: Alpine Static Image with LLD
+# Stage 3: Build WasmEdge with static LLVM+LLD
 ########################################
-FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS alpine-static
-
-LABEL maintainer="you@example.com"
-LABEL description="Alpine ${ALPINE_VERSION} with LLD and static toolchain"
+FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS wasmedge-builder
 
 COPY --from=xx / /
 
 RUN apk add --no-cache bash
 SHELL ["bash", "-c"]
 
+# Install build dependencies
 RUN apk add --no-cache \
     cmake \
-    ninja \
     samurai \
     g++ \
     clang \
     llvm-static \
-    lld-dev \
     zlib-static \
     zlib-dev \
     git \
@@ -77,86 +72,50 @@ RUN apk add --no-cache \
     libc-dev \
     libffi-dev
 
+# Ensure destination lib dir exists
 RUN mkdir -p /usr/lib/llvm/lib
 
-COPY --from=lld-builder /lld-install/lib/ /tmp/lld-lib/
-RUN find /tmp/lld-lib -name 'liblld*.a' -exec cp {} /usr/lib/llvm/lib/ \; || true
+# Copy LLD static libraries and binaries from builder
+COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
+COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
 
-COPY --from=lld-builder /lld-install/bin/ /usr/bin/
+# Patch LLVMConfig for proper sysroot awareness
+RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
 
-# Ensure LLVMConfig uses sysroot path for cross builds
-RUN sed -i "s|/usr/lib/llvm|$(xx-info sysroot)usr/lib/llvm|" $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
-
-# Proper xx-toolchain generator that outputs valid CMake
+# Add xx-toolchain shortcut script (for cross-compilation use inside container)
 RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 #!/bin/bash
 mkdir -p /etc/xx-toolchains/
 TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-info triple).cmake"
 if [ ! -f "$TOOLCHAIN_FILE" ]; then
-  {
-    echo "set(CMAKE_SYSTEM_NAME Linux)"
-    echo "set(CMAKE_SYSTEM_PROCESSOR $(xx-info march))"
-    echo "set(CMAKE_C_COMPILER clang)"
-    echo "set(CMAKE_CXX_COMPILER clang++)"
-    echo "set(CMAKE_SYSROOT $(xx-info sysroot))"
-  } > "$TOOLCHAIN_FILE"
+  xx-clang --cmake-toolchain "$TOOLCHAIN_FILE"
 fi
 echo "$TOOLCHAIN_FILE"
 EOT
 
-########################################
-# Stage 4: Build WasmEdge
-########################################
-FROM alpine-static AS builder
+# Build WasmEdge
+WORKDIR /build
+RUN git clone --depth=1 --branch=0.14.1 https://github.com/WasmEdge/WasmEdge.git
+WORKDIR /build/WasmEdge
 
-ARG TARGETPLATFORM
-ARG ALPINE_VERSION
+RUN cmake -B build \
+    -G Ninja \
+    -DWASMEDGE_BUILD_TESTS=OFF \
+    -DWASMEDGE_LINK_LLVM_STATIC=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)"
 
-RUN apk add git llvm-dev
-
-RUN xx-apk add \
-    g++ \
-    llvm-dev llvm-static \
-    lld lld-dev \
-    zlib-dev zlib-static
-
-RUN sed -i "s|/usr/lib/llvm|$(xx-info sysroot)usr/lib/llvm|" $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake
-
-RUN find $(xx-info sysroot)/usr/lib/llvm/lib/ -name 'liblld*.a' -exec cp {} $(xx-info sysroot)/usr/lib/llvm*/lib/ \; || true
-
-RUN ! xx-info is-cross || cp -f /usr/lib/llvm*/bin/llvm-config $(xx-info sysroot)/usr/lib/llvm*/bin/llvm-config
-
-RUN --mount=type=bind,target=/src,source=. \
-    cmake -S /src -B /build -G Ninja \
-        -DCMAKE_BUILD_TYPE=MinSizeRel \
-        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-        -DCMAKE_INSTALL_PREFIX="/install" \
-        -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
-        -DWASMEDGE_BUILD_PACKAGE="TGZ" \
-        -DWASMEDGE_USE_LLVM=ON \
-        -DWASMEDGE_BUILD_STATIC_LIB=ON \
-        -DWASMEDGE_BUILD_TESTS=OFF \
-        -DWASMEDGE_BUILD_SHARED_LIB=OFF \
-        -DWASMEDGE_BUILD_TOOLS=OFF \
-        -DWASMEDGE_BUILD_PLUGINS=OFF \
-        -DWASMEDGE_BUILD_EXAMPLE=OFF \
-        -DWASMEDGE_LINK_LLVM_STATIC=ON \
-        -DWASMEDGE_LINK_TOOLS_STATIC=ON \
-        -DWASMEDGE_DISABLE_LIBTINFO=ON
-
-RUN --mount=type=bind,target=/src,source=. \
-    cmake --build /build -- install package
-
-RUN --mount=type=bind,target=/src,source=. <<EOT
-    set -ex
-    WASMEDGE_VERSION="$(cd /src && git describe --match '[0-9].[0-9]*' --tag)"
-    ARCH="$(xx-info march)"
-    ARCHIVE_TAG=${WASMEDGE_VERSION%%-*}-alpine${ALPINE_VERSION}_${ARCH}
-    mv /build/WasmEdge-*-Linux.tar.gz /build/WasmEdge-${ARCHIVE_TAG}_static.tar.gz
-EOT
+RUN cmake --build build --target install
 
 ########################################
-# Stage 5: Final packaged output
+# Stage 4: Final runtime image
 ########################################
-FROM scratch AS tar
-COPY --from=builder /build/WasmEdge-*.tar.gz /
+FROM alpine:${ALPINE_VERSION} AS wasmedge-runtime
+
+RUN apk add --no-cache bash
+
+COPY --from=wasmedge-builder /usr/local /usr/local
+
+WORKDIR /src
+CMD ["/bin/bash"]
