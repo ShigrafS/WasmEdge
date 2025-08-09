@@ -12,7 +12,6 @@ FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
 ########################################
 FROM alpine:${ALPINE_VERSION} AS lld-builder
 
-# Install dependencies for building LLVM LLD
 RUN apk add --no-cache \
     bash \
     cmake \
@@ -33,12 +32,10 @@ RUN apk add --no-cache \
 
 WORKDIR /lld-build
 
-# Clone LLVM source (only the release branch we need)
 RUN git clone --depth=1 --branch=release/18.x https://github.com/llvm/llvm-project.git
 
 WORKDIR /lld-build/llvm-project
 
-# Configure build — only LLD, minimal targets, skip unused tools/tests/benchmarks
 RUN cmake -B build \
     -G Ninja \
     -DLLVM_ENABLE_PROJECTS="lld" \
@@ -47,13 +44,8 @@ RUN cmake -B build \
     -DCMAKE_INSTALL_PREFIX=/lld-install \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
-    -DLLVM_BUILD_TOOLS=OFF \
-    -DLLVM_INCLUDE_TESTS=OFF \
-    -DLLVM_INCLUDE_EXAMPLES=OFF \
-    -DLLVM_INCLUDE_BENCHMARKS=OFF \
     llvm
 
-# Build and install
 RUN cmake --build build --target install
 
 ########################################
@@ -69,7 +61,7 @@ SHELL ["bash", "-c"]
 # Install build dependencies
 RUN apk add --no-cache \
     cmake \
-    samurai \
+    ninja \
     g++ \
     clang \
     llvm-static \
@@ -87,16 +79,13 @@ RUN mkdir -p /usr/lib/llvm/lib
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
 COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
 
-# Patch LLVMConfig for proper sysroot awareness
-RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
-
-# Add xx-toolchain shortcut script (for cross-compilation use inside container)
+# Add xx-toolchain shortcut script
 RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 #!/bin/bash
 mkdir -p /etc/xx-toolchains/
 TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-info triple).cmake"
 if [ ! -f "$TOOLCHAIN_FILE" ]; then
-  xx-clang --cmake-toolchain "$TOOLCHAIN_FILE"
+  xx-clang --print-cmake-toolchain-file > "$TOOLCHAIN_FILE"
 fi
 echo "$TOOLCHAIN_FILE"
 EOT
