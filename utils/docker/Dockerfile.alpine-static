@@ -12,6 +12,7 @@ FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
 ########################################
 FROM alpine:${ALPINE_VERSION} AS lld-builder
 
+# Install dependencies for building LLVM LLD
 RUN apk add --no-cache \
     bash \
     cmake \
@@ -32,10 +33,12 @@ RUN apk add --no-cache \
 
 WORKDIR /lld-build
 
+# Clone LLVM source (only the release branch we need)
 RUN git clone --depth=1 --branch=release/18.x https://github.com/llvm/llvm-project.git
 
 WORKDIR /lld-build/llvm-project
 
+# Configure build — only LLD, minimal targets, skip unused tools/tests/benchmarks
 RUN cmake -B build \
     -G Ninja \
     -DLLVM_ENABLE_PROJECTS="lld" \
@@ -44,8 +47,13 @@ RUN cmake -B build \
     -DCMAKE_INSTALL_PREFIX=/lld-install \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
+    -DLLVM_BUILD_TOOLS=OFF \
+    -DLLVM_INCLUDE_TESTS=OFF \
+    -DLLVM_INCLUDE_EXAMPLES=OFF \
+    -DLLVM_INCLUDE_BENCHMARKS=OFF \
     llvm
 
+# Build and install
 RUN cmake --build build --target install
 
 ########################################
