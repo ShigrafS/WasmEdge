@@ -8,7 +8,7 @@ ARG ALPINE_VERSION=3.22
 FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
 
 ########################################
-# Stage 2: Build LLVM + LLD from source
+# Stage 2: Build LLVM + LLD
 ########################################
 FROM alpine:${ALPINE_VERSION} AS lld-builder
 
@@ -17,6 +17,7 @@ RUN apk add --no-cache \
     cmake \
     ninja \
     clang \
+    g++ \
     git \
     musl-dev \
     zlib-dev \
@@ -26,9 +27,7 @@ RUN apk add --no-cache \
     curl \
     tar \
     xz \
-    g++ \
-    python3 \
-    py3-pip
+    python3
 
 WORKDIR /lld-build
 
@@ -44,7 +43,7 @@ RUN cmake -B build \
     -DCMAKE_INSTALL_PREFIX=/lld-install \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
-    -DLLVM_BUILD_TOOLS=OFF \
+    -DLLVM_BUILD_TOOLS=ON \
     -DLLVM_INCLUDE_TESTS=OFF \
     -DLLVM_INCLUDE_EXAMPLES=OFF \
     -DLLVM_INCLUDE_BENCHMARKS=OFF \
@@ -53,32 +52,44 @@ RUN cmake -B build \
 RUN cmake --build build --target install
 
 ########################################
-# Stage 3: Build WasmEdge with static LLVM+LLD
+# Stage 3: Build WasmEdge with LLVM+LLD
 ########################################
 FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS wasmedge-builder
 
 COPY --from=xx / /
 
-RUN apk add --no-cache bash
-SHELL ["bash", "-c"]
-
 RUN apk add --no-cache \
+    bash \
     cmake \
     samurai \
-    g++ \
     clang \
+    g++ \
+    llvm-static \
     zlib-static \
     zlib-dev \
     git \
     musl-dev \
     libc-dev \
-    libffi-dev
+    libffi-dev \
+    ninja
+
+SHELL ["bash", "-c"]
 
 RUN mkdir -p /usr/lib/llvm/lib
+RUN mkdir -p /usr/lib/llvm/include
+RUN mkdir -p /usr/lib/llvm/cmake/llvm
+
+# Copy LLVM + LLD static libs, headers, and CMake config
+COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/llvm/lib/
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
-COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
+COPY --from=lld-builder /lld-install/bin/* /usr/bin/
+COPY --from=lld-builder /lld-install/include /usr/lib/llvm/include
 COPY --from=lld-builder /lld-install/lib/cmake/llvm /usr/lib/llvm/cmake/llvm
 
+# Optional: patch LLVM CMake config if needed
+RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
+
+# Add xx-toolchain script
 RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 #!/bin/bash
 mkdir -p /etc/xx-toolchains/
@@ -89,6 +100,7 @@ fi
 echo "$TOOLCHAIN_FILE"
 EOT
 
+# Build WasmEdge
 WORKDIR /build
 RUN git clone --depth=1 --branch=0.14.1 https://github.com/WasmEdge/WasmEdge.git
 WORKDIR /build/WasmEdge
