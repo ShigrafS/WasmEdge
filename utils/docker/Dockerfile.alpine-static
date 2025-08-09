@@ -8,7 +8,7 @@ ARG ALPINE_VERSION=3.22
 FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
 
 ########################################
-# Stage 2: Build LLD from LLVM source
+# Stage 2: Build LLVM + LLD from source
 ########################################
 FROM alpine:${ALPINE_VERSION} AS lld-builder
 
@@ -17,9 +17,6 @@ RUN apk add --no-cache \
     cmake \
     ninja \
     clang \
-    llvm-dev \
-    llvm-static \
-    lld-dev \
     git \
     musl-dev \
     zlib-dev \
@@ -28,21 +25,31 @@ RUN apk add --no-cache \
     libffi-dev \
     curl \
     tar \
-    xz
+    xz \
+    g++ \
+    python3 \
+    py3-pip
 
 WORKDIR /lld-build
+
 RUN git clone --depth=1 --branch=release/18.x https://github.com/llvm/llvm-project.git
 
 WORKDIR /lld-build/llvm-project
+
 RUN cmake -B build \
     -G Ninja \
-    -DLLVM_ENABLE_PROJECTS="lld" \
+    -DLLVM_ENABLE_PROJECTS="llvm;lld" \
     -DLLVM_TARGETS_TO_BUILD="X86;WebAssembly" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/lld-install \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
+    -DLLVM_BUILD_TOOLS=OFF \
+    -DLLVM_INCLUDE_TESTS=OFF \
+    -DLLVM_INCLUDE_EXAMPLES=OFF \
+    -DLLVM_INCLUDE_BENCHMARKS=OFF \
     llvm
+
 RUN cmake --build build --target install
 
 ########################################
@@ -52,13 +59,14 @@ FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS wasmedge-builder
 
 COPY --from=xx / /
 
+RUN apk add --no-cache bash
+SHELL ["bash", "-c"]
+
 RUN apk add --no-cache \
-    bash \
     cmake \
-    ninja \
+    samurai \
     g++ \
     clang \
-    llvm-static \
     zlib-static \
     zlib-dev \
     git \
@@ -66,27 +74,34 @@ RUN apk add --no-cache \
     libc-dev \
     libffi-dev
 
-# Ensure destination lib dir exists
 RUN mkdir -p /usr/lib/llvm/lib
-
-# Copy LLD + LLVM static libraries
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
-COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/llvm/lib/
 COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
+COPY --from=lld-builder /lld-install/lib/cmake/llvm /usr/lib/llvm/cmake/llvm
 
-# Build WasmEdge
+RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
+#!/bin/bash
+mkdir -p /etc/xx-toolchains/
+TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-info triple).cmake"
+if [ ! -f "$TOOLCHAIN_FILE" ]; then
+  xx-clang --cmake-toolchain "$TOOLCHAIN_FILE"
+fi
+echo "$TOOLCHAIN_FILE"
+EOT
+
 WORKDIR /build
 RUN git clone --depth=1 --branch=0.14.1 https://github.com/WasmEdge/WasmEdge.git
 WORKDIR /build/WasmEdge
 
-# Use xx-provided toolchain directly
 RUN cmake -B build \
     -G Ninja \
     -DWASMEDGE_BUILD_TESTS=OFF \
     -DWASMEDGE_LINK_LLVM_STATIC=ON \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DCMAKE_TOOLCHAIN_FILE="$(xx-info cmake-toolchain-file)"
+    -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
+    -DCMAKE_PREFIX_PATH=/usr/lib/llvm
+
 RUN cmake --build build --target install
 
 ########################################
@@ -95,6 +110,7 @@ RUN cmake --build build --target install
 FROM alpine:${ALPINE_VERSION} AS wasmedge-runtime
 
 RUN apk add --no-cache bash
+
 COPY --from=wasmedge-builder /usr/local /usr/local
 
 WORKDIR /src
