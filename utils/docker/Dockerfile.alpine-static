@@ -1,41 +1,25 @@
-# syntax=docker/dockerfile:1.5-labs
+# ================================
+# Stage 1: Build LLD with LLVM
+# ================================
+FROM --platform=$BUILDPLATFORM alpine:3.19 AS lld-builder
 
-ARG ALPINE_VERSION=3.22
-
-########################################
-# Stage 1: xx (cross-compilation tool)
-########################################
-FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
-
-########################################
-# Stage 2: Build LLD from LLVM source
-########################################
-FROM alpine:${ALPINE_VERSION} AS lld-builder
-
+# Install dependencies
 RUN apk add --no-cache \
-    bash \
+    build-base \
     cmake \
     ninja \
-    clang \
-    llvm-dev \
-    llvm-static \
-    lld-dev \
     git \
-    musl-dev \
+    python3 \
     zlib-dev \
-    zlib-static \
-    libc-dev \
-    libffi-dev \
-    curl \
-    tar \
-    xz
+    libxml2-dev \
+    ncurses-dev \
+    bash
 
-WORKDIR /lld-build
+# Clone LLVM monorepo (shallow)
+WORKDIR /llvm-project
+RUN git clone --depth=1 --branch llvmorg-17.0.6 https://github.com/llvm/llvm-project.git .
 
-RUN git clone --depth=1 --branch=release/18.x https://github.com/llvm/llvm-project.git
-
-WORKDIR /lld-build/llvm-project
-
+# Configure LLVM to build only LLD and minimal targets
 RUN cmake -B build \
     -G Ninja \
     -DLLVM_ENABLE_PROJECTS="lld" \
@@ -44,75 +28,76 @@ RUN cmake -B build \
     -DCMAKE_INSTALL_PREFIX=/lld-install \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
+    -DLLVM_BUILD_TOOLS=OFF \
+    -DLLVM_INCLUDE_TESTS=OFF \
+    -DLLVM_INCLUDE_EXAMPLES=OFF \
+    -DLLVM_INCLUDE_BENCHMARKS=OFF \
     llvm
 
+# Build & install
 RUN cmake --build build --target install
 
-########################################
-# Stage 3: Build WasmEdge with static LLVM+LLD
-########################################
-FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS wasmedge-builder
 
+# ================================
+# Stage 2: Build WasmEdge with LLD
+# ================================
+FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
+
+FROM --platform=$BUILDPLATFORM alpine:3.19 AS wasmedge-builder
+
+# Copy xx cross-compilation tools
 COPY --from=xx / /
 
-RUN apk add --no-cache bash
-SHELL ["bash", "-c"]
-
-# Install build dependencies
+# Install build deps (must include ninja again here)
 RUN apk add --no-cache \
+    build-base \
     cmake \
     ninja \
-    g++ \
-    clang \
-    llvm-static \
-    zlib-static \
-    zlib-dev \
     git \
-    musl-dev \
-    libc-dev \
-    libffi-dev
+    python3 \
+    zlib-dev \
+    libxml2-dev \
+    ncurses-dev \
+    bash
 
-# Ensure destination lib dir exists
-RUN mkdir -p /usr/lib/llvm/lib
-
-# Copy LLD static libraries and binaries from builder
+# Copy LLD from first stage
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
+COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/llvm/lib/
 COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
 
-# Add xx-toolchain shortcut script
-RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
-#!/bin/bash
-mkdir -p /etc/xx-toolchains/
-TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-info triple).cmake"
-if [ ! -f "$TOOLCHAIN_FILE" ]; then
-  xx-clang --print-cmake-toolchain-file > "$TOOLCHAIN_FILE"
-fi
-echo "$TOOLCHAIN_FILE"
-EOT
-
-# Build WasmEdge
+# Prepare workspace
 WORKDIR /build
+
+# Clone WasmEdge (specific commit for 0.14.1)
 RUN git clone --depth=1 --branch=0.14.1 https://github.com/WasmEdge/WasmEdge.git
+
 WORKDIR /build/WasmEdge
 
-RUN cmake -B build \
-    -G Ninja \
-    -DWASMEDGE_BUILD_TESTS=OFF \
-    -DWASMEDGE_LINK_LLVM_STATIC=ON \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)"
+# Get toolchain file path safely
+RUN TOOLCHAIN_FILE=$(xx-info cmake-toolchain-file) && \
+    cmake -B build \
+        -G Ninja \
+        -DWASMEDGE_BUILD_TESTS=OFF \
+        -DWASMEDGE_LINK_LLVM_STATIC=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE"
 
+# Build & install WasmEdge
 RUN cmake --build build --target install
 
-########################################
-# Stage 4: Final runtime image
-########################################
-FROM alpine:${ALPINE_VERSION} AS wasmedge-runtime
 
-RUN apk add --no-cache bash
+# ================================
+# Stage 3: Final minimal image
+# ================================
+FROM alpine:3.19
 
+# Runtime dependencies for WasmEdge
+RUN apk add --no-cache \
+    libstdc++ \
+    bash
+
+# Copy installed WasmEdge from builder
 COPY --from=wasmedge-builder /usr/local /usr/local
 
-WORKDIR /src
-CMD ["/bin/bash"]
+ENTRYPOINT ["/usr/local/bin/wasmedge"]
