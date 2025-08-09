@@ -31,11 +31,9 @@ RUN apk add --no-cache \
     xz
 
 WORKDIR /lld-build
-
 RUN git clone --depth=1 --branch=release/18.x https://github.com/llvm/llvm-project.git
 
 WORKDIR /lld-build/llvm-project
-
 RUN cmake -B build \
     -G Ninja \
     -DLLVM_ENABLE_PROJECTS="lld" \
@@ -45,7 +43,6 @@ RUN cmake -B build \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
     llvm
-
 RUN cmake --build build --target install
 
 ########################################
@@ -55,11 +52,8 @@ FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS wasmedge-builder
 
 COPY --from=xx / /
 
-RUN apk add --no-cache bash
-SHELL ["bash", "-c"]
-
-# Install build dependencies
 RUN apk add --no-cache \
+    bash \
     cmake \
     ninja \
     g++ \
@@ -75,34 +69,24 @@ RUN apk add --no-cache \
 # Ensure destination lib dir exists
 RUN mkdir -p /usr/lib/llvm/lib
 
-# Copy LLD static libraries and binaries from builder
+# Copy LLD + LLVM static libraries
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
+COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/llvm/lib/
 COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
-
-# Add xx-toolchain shortcut script
-RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
-#!/bin/bash
-mkdir -p /etc/xx-toolchains/
-TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-info triple).cmake"
-if [ ! -f "$TOOLCHAIN_FILE" ]; then
-  xx-clang --print-cmake-toolchain-file > "$TOOLCHAIN_FILE"
-fi
-echo "$TOOLCHAIN_FILE"
-EOT
 
 # Build WasmEdge
 WORKDIR /build
 RUN git clone --depth=1 --branch=0.14.1 https://github.com/WasmEdge/WasmEdge.git
 WORKDIR /build/WasmEdge
 
+# Use xx-provided toolchain directly
 RUN cmake -B build \
     -G Ninja \
     -DWASMEDGE_BUILD_TESTS=OFF \
     -DWASMEDGE_LINK_LLVM_STATIC=ON \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)"
-
+    -DCMAKE_TOOLCHAIN_FILE="$(xx-info cmake-toolchain-file)"
 RUN cmake --build build --target install
 
 ########################################
@@ -111,7 +95,6 @@ RUN cmake --build build --target install
 FROM alpine:${ALPINE_VERSION} AS wasmedge-runtime
 
 RUN apk add --no-cache bash
-
 COPY --from=wasmedge-builder /usr/local /usr/local
 
 WORKDIR /src
