@@ -118,7 +118,9 @@ RUN apk add --no-cache \
     ninja
 
 # Copy the toolchain script
-COPY --from=alpine-static /usr/bin/xx-toolchain /usr/bin/xx-toolchain
+# Copy all necessary xx binaries and toolchains
+COPY --from=alpine-static /usr/bin/xx* /usr/bin/
+COPY --from=alpine-static /etc/xx-toolchains /etc/xx-toolchains
 
 RUN --mount=type=bind,target=/src,source=. \
     cmake -S /src -B /build -G Ninja \
