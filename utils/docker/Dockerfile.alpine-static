@@ -114,7 +114,11 @@ WORKDIR /src
 RUN apk add --no-cache \
     curl \
     tar \
-    git
+    git \
+    ninja
+
+# Copy the toolchain script
+COPY --from=alpine-static /usr/bin/xx-toolchain /usr/bin/xx-toolchain
 
 RUN --mount=type=bind,target=/src,source=. \
     cmake -S /src -B /build -G Ninja \
