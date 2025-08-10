@@ -45,14 +45,10 @@ FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
 
 FROM --platform=$BUILDPLATFORM alpine:3.19 AS wasmedge-builder
 
-# Arguments for cross-compilation
-ARG TARGETPLATFORM
-ARG BUILDPLATFORM
-
 # Copy xx cross-compilation tools
 COPY --from=xx / /
 
-# Install build deps
+# Install build deps (must include ninja again here)
 RUN apk add --no-cache \
     build-base \
     cmake \
@@ -77,13 +73,14 @@ RUN git clone --depth=1 --branch=0.14.1 https://github.com/WasmEdge/WasmEdge.git
 
 WORKDIR /build/WasmEdge
 
-# Use xx-cmake to handle toolchain automatically
-RUN xx-cmake -B build \
+# Configure with CMake & xx toolchain
+RUN cmake -B build \
     -G Ninja \
     -DWASMEDGE_BUILD_TESTS=OFF \
     -DWASMEDGE_LINK_LLVM_STATIC=ON \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=/usr/local
+    -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DCMAKE_TOOLCHAIN_FILE=$(xx-info cmake-toolchain-file)
 
 # Build & install WasmEdge
 RUN cmake --build build --target install
