@@ -56,7 +56,7 @@ FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS alpine-static
 LABEL maintainer="you@example.com"
 LABEL description="Alpine ${ALPINE_VERSION} with LLD and static toolchain"
 
-COPY --from=xx / /
+COPY --from=xx /usr/bin/xx* /usr/bin/
 
 # Install bash so we can use SHELL
 RUN apk add --no-cache bash
