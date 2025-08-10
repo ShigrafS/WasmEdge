@@ -111,7 +111,6 @@ RUN cmake -B build \
     -DWASMEDGE_LINK_LLVM_STATIC=ON \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
     -DCMAKE_PREFIX_PATH=/usr/lib/llvm
 
 RUN cmake --build build --target install
