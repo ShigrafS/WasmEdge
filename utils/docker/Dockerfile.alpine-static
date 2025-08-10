@@ -95,7 +95,7 @@ RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 mkdir -p /etc/xx-toolchains/
 TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-info triple).cmake"
 if [ ! -f "$TOOLCHAIN_FILE" ]; then
-  xx-clang --cmake-toolchain "$TOOLCHAIN_FILE"
+  xx-cmake-toolchain "$TOOLCHAIN_FILE"
 fi
 echo "$TOOLCHAIN_FILE"
 EOT
@@ -105,6 +105,7 @@ EOT
 ########################################
 
 FROM alpine-static AS wasmedge-build
+SHELL ["bash", "-c"]
 
 ARG TARGETPLATFORM
 ARG ALPINE_VERSION
@@ -115,7 +116,9 @@ RUN apk add --no-cache \
     curl \
     tar \
     git \
-    ninja
+    ninja \
+    bash \
+    cmake
 
 # Copy all necessary xx binaries and toolchains
 COPY --from=alpine-static /usr/bin/xx* /usr/bin/
