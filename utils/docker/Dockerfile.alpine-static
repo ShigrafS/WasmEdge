@@ -89,14 +89,27 @@ COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
 # Patch LLVMConfig for proper sysroot awareness
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
 
-# Add xx-toolchain shortcut script
+# Add xx-toolchain shortcut script (manual generation)
 RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 #!/bin/bash
 mkdir -p /etc/xx-toolchains/
-TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-info triple).cmake"
-if [ ! -f "$TOOLCHAIN_FILE" ]; then
-  xx-cmake-toolchain "$TOOLCHAIN_FILE"
-fi
+TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-clang --print-target-triple).cmake"
+[ -f "$TOOLCHAIN_FILE" ] || cat <<EOF > "$TOOLCHAIN_FILE"
+set(CMAKE_CROSSCOMPILING ON)
+set(CMAKE_SYSROOT "$(xx-info sysroot)")
+set(CMAKE_SYSTEM_NAME "Linux")
+set(CMAKE_SYSTEM_VERSION 1)
+set(CMAKE_SYSTEM_PROCESSOR "$(xx-info march)")
+set(CMAKE_C_COMPILER "$(which clang)")
+set(CMAKE_CXX_COMPILER "$(which clang++)")
+set(CMAKE_ASM_COMPILER "$(which clang)")
+set(CMAKE_AR "$(which ar)")
+set(CMAKE_RANLIB "$(which ranlib)")
+set(PKG_CONFIG_EXECUTABLE "$(xx-clang --print-prog-name=pkg-config)")
+set(CMAKE_C_COMPILER_TARGET "$(xx-clang --print-target-triple)")
+set(CMAKE_CXX_COMPILER_TARGET "$(xx-clang --print-target-triple)")
+set(CMAKE_ASM_COMPILER_TARGET "$(xx-clang --print-target-triple)")
+EOF
 echo "$TOOLCHAIN_FILE"
 EOT
 
