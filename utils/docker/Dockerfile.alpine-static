@@ -82,10 +82,14 @@ RUN apk add --no-cache \
 # Ensure necessary directories exist
 RUN mkdir -p /usr/lib/llvm/lib /usr/lib/cmake/llvm $(xx-info sysroot)/usr/bin
 
-# LLVM static libraries
+# Copy LLVM static libraries to both expected locations
+COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/
 COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/llvm/lib/
-# LLD static libraries
+
+# Copy LLD static libraries to both expected locations
+COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
+
 # LLVM CMake config directory
 COPY --from=lld-builder /lld-install/lib/cmake/llvm /usr/lib/cmake/llvm
 # LLVM tools (needed for CMake and config)
