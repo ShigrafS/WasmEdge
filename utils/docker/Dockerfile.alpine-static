@@ -46,6 +46,7 @@ RUN cmake -B build \
     -DCMAKE_INSTALL_PREFIX=/lld-install \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
+    -DLLVM_TOOL_LTO_BUILD=ON \
     llvm
 
 RUN cmake --build build --target install
@@ -84,33 +85,36 @@ RUN apk add --no-cache \
 # Ensure necessary directories exist
 RUN mkdir -p /usr/lib/llvm/lib /usr/lib/cmake/llvm $(xx-info sysroot)/usr/bin
 
-# Copy LLVM static libraries to both expected locations
+# Copy LLVM static libraries
 COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/
 COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/llvm/lib/
 
-# Copy LLD static libraries to both expected locations
+# Copy LLD static libraries
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
 
 # LLVM CMake config directory
 COPY --from=lld-builder /lld-install/lib/cmake/llvm /usr/lib/cmake/llvm
-# LLVM tools (needed for CMake and config)
+# LLVM tools
 COPY --from=lld-builder /lld-install/bin/llvm-config /usr/bin/
 # LLD tools
 COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
-
-# Copy llvm-tblgen (needed by LLVM CMake config)
+# llvm-tblgen
 COPY --from=lld-builder /lld-install/bin/llvm-tblgen /usr/bin/
 RUN ! xx-info is-cross || cp -f /usr/bin/llvm-tblgen $(xx-info sysroot)/usr/bin/llvm-tblgen
 
-# Copy llvm-config into sysroot if cross-compiling
+# llvm-config for cross
 RUN ! xx-info is-cross || cp -f /usr/bin/llvm-config $(xx-info sysroot)/usr/bin/llvm-config
 
-# Copy LTO shared lib to satisfy LLVMConfig
+# Copy llvm-lto binary
+COPY --from=lld-builder /lld-install/bin/llvm-lto /usr/bin/
+RUN ! xx-info is-cross || cp -f /usr/bin/llvm-lto $(xx-info sysroot)/usr/bin/llvm-lto
+
+# LTO shared lib
 COPY --from=lld-builder /lld-install/lib/libLTO.so* /usr/lib/
 RUN ! xx-info is-cross || cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/lib/
 
-# Copy other LLVM tools that may be required by CMake
+# Additional LLVM tools
 COPY --from=lld-builder /lld-install/bin/llvm-ar /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-ranlib /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-nm /usr/bin/
@@ -122,7 +126,7 @@ RUN ! xx-info is-cross || cp -f /usr/bin/llvm-nm $(xx-info sysroot)/usr/bin/llvm
 # Patch LLVMConfig for proper sysroot awareness
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
 
-# Add xx-toolchain shortcut script (manual generation)
+# Add xx-toolchain helper
 RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 #!/bin/bash
 mkdir -p /etc/xx-toolchains/
@@ -168,7 +172,6 @@ RUN apk add --no-cache \
     zstd-dev \
     zstd-static
 
-# Copy all necessary xx binaries and toolchains
 COPY --from=alpine-static /usr/bin/xx* /usr/bin/
 
 RUN --mount=type=bind,target=/src,source=. \
@@ -193,8 +196,6 @@ RUN --mount=type=bind,target=/src,source=. \
 RUN --mount=type=bind,target=/src,source=. \
     cmake --build /build -- install package
 
-# Optional: Working directory if you plan to mount source code
 WORKDIR /src
 
-# Optional: Default command
 CMD ["/bin/bash"]
