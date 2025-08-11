@@ -28,7 +28,9 @@ RUN apk add --no-cache \
     libffi-dev \
     curl \
     tar \
-    xz
+    xz \
+    zstd-dev \
+    zstd-static
 
 WORKDIR /lld-build
 
@@ -97,6 +99,10 @@ COPY --from=lld-builder /lld-install/bin/llvm-config /usr/bin/
 # LLD tools
 COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
 
+# Copy llvm-tblgen (needed by LLVM CMake config)
+COPY --from=lld-builder /lld-install/bin/llvm-tblgen /usr/bin/
+RUN ! xx-info is-cross || cp -f /usr/bin/llvm-tblgen $(xx-info sysroot)/usr/bin/llvm-tblgen
+
 # Copy llvm-config into sysroot if cross-compiling
 RUN ! xx-info is-cross || cp -f /usr/bin/llvm-config $(xx-info sysroot)/usr/bin/llvm-config
 
@@ -145,7 +151,9 @@ RUN apk add --no-cache \
     git \
     ninja \
     bash \
-    cmake
+    cmake \
+    zstd-dev \
+    zstd-static
 
 # Copy all necessary xx binaries and toolchains
 COPY --from=alpine-static /usr/bin/xx* /usr/bin/
