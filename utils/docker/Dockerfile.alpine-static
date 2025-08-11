@@ -38,7 +38,7 @@ WORKDIR /lld-build/llvm-project
 
 RUN cmake -B build \
     -G Ninja \
-    -DLLVM_ENABLE_PROJECTS="lld" \
+    -DLLVM_ENABLE_PROJECTS="llvm;lld" \
     -DLLVM_TARGETS_TO_BUILD="X86;WebAssembly" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/lld-install \
@@ -79,12 +79,22 @@ RUN apk add --no-cache \
     libc-dev \
     libffi-dev
 
-# Ensure destination lib dir exists
-RUN mkdir -p /usr/lib/llvm/lib
+# Ensure necessary directories exist
+RUN mkdir -p /usr/lib/llvm/lib /usr/lib/cmake/llvm $(xx-info sysroot)/usr/bin
 
-# Copy LLD static libraries and binaries from builder
+# LLVM static libraries
+COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/llvm/lib/
+# LLD static libraries
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
+# LLVM CMake config directory
+COPY --from=lld-builder /lld-install/lib/cmake/llvm /usr/lib/cmake/llvm
+# LLVM tools (needed for CMake and config)
+COPY --from=lld-builder /lld-install/bin/llvm-config /usr/bin/
+# LLD tools
 COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
+
+# Copy llvm-config into sysroot if cross-compiling
+RUN ! xx-info is-cross || cp -f /usr/bin/llvm-config $(xx-info sysroot)/usr/bin/llvm-config
 
 # Patch LLVMConfig for proper sysroot awareness
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
@@ -142,6 +152,7 @@ RUN --mount=type=bind,target=/src,source=. \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX="/install" \
         -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
+        -DCMAKE_PREFIX_PATH="$(xx-info sysroot)/usr/lib/cmake/llvm" \
         -DWASMEDGE_BUILD_PACKAGE="TGZ" \
         -DWASMEDGE_USE_LLVM=ON \
         -DWASMEDGE_BUILD_STATIC_LIB=ON \
