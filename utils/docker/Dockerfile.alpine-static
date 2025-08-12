@@ -118,6 +118,9 @@ RUN ! xx-info is-cross || cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/lib/
 COPY --from=lld-builder /lld-install/bin/llvm-profdata /usr/bin/
 RUN ! xx-info is-cross || cp -f /usr/bin/llvm-profdata $(xx-info sysroot)/usr/bin/llvm-profdata
 
+COPY --from=lld-builder /lld-install/bin/llc /usr/bin/
+RUN ! xx-info is-cross || cp -f /usr/bin/llc $(xx-info sysroot)/usr/bin/llc
+
 # Additional LLVM tools
 COPY --from=lld-builder /lld-install/bin/llvm-ar /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-ranlib /usr/bin/
