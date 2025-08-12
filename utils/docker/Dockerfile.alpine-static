@@ -47,6 +47,7 @@ RUN cmake -B build \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
     -DLLVM_TOOL_LTO_BUILD=ON \
+    -DLLVM_TOOL_BUGPOINT_BUILD=ON \
     llvm
 
 RUN cmake --build build --target install
@@ -121,6 +122,8 @@ RUN ! xx-info is-cross || cp -f /usr/bin/llvm-profdata $(xx-info sysroot)/usr/bi
 COPY --from=lld-builder /lld-install/bin/llvm-ar /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-ranlib /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-nm /usr/bin/
+
+COPY --from=lld-builder /lld-install/bin/bugpoint /usr/bin/
 
 RUN ! xx-info is-cross || cp -f /usr/bin/llvm-ar $(xx-info sysroot)/usr/bin/llvm-ar
 RUN ! xx-info is-cross || cp -f /usr/bin/llvm-ranlib $(xx-info sysroot)/usr/bin/llvm-ranlib
