@@ -40,7 +40,7 @@ WORKDIR /lld-build/llvm-project
 
 RUN cmake -B build \
     -G Ninja \
-    -DLLVM_ENABLE_PROJECTS="llvm;lld" \
+    -DLLVM_ENABLE_PROJECTS="clang;llvm;lld" \
     -DLLVM_TARGETS_TO_BUILD="X86;WebAssembly" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/lld-install \
