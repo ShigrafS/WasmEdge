@@ -180,6 +180,8 @@ RUN apk add --no-cache \
 
 COPY --from=alpine-static /usr/bin/xx* /usr/bin/
 
+RUN ln -s /bin/true /usr/bin/dsymutil || true
+
 RUN --mount=type=bind,target=/src,source=. \
     cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
