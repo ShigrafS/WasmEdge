@@ -48,6 +48,7 @@ RUN cmake -B build \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
     -DLLVM_TOOL_LTO_BUILD=ON \
     -DLLVM_TOOL_BUGPOINT_BUILD=ON \
+    -DLLVM_TOOL_LLI_BUILD=ON \
     llvm
 
 RUN cmake --build build --target install
