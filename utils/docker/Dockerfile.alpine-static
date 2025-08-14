@@ -54,6 +54,9 @@ RUN cmake -B build \
 RUN cmake --build build --target install
 RUN test -f /lld-install/bin/lli || (echo "Error: lli not installed!" && false)
 
+# Extract list of required binaries from LLVMExports
+RUN grep -oP '(?<=file=").*?/bin/[^"]+' /lld-install/lib/cmake/llvm/LLVMExports.cmake | sort -u > /lld-install/bin/llvm-required-files.txt
+
 ########################################
 # Stage 3: Alpine Static Image with LLD
 ########################################
@@ -96,51 +99,24 @@ COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/llvm/lib/
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
 
-# LLVM CMake config directory
+# Copy LLVM CMake config directory
 COPY --from=lld-builder /lld-install/lib/cmake/llvm /usr/lib/cmake/llvm
-# LLVM tools
-COPY --from=lld-builder /lld-install/bin/llvm-config /usr/bin/
-# LLD tools
-COPY --from=lld-builder /lld-install/bin/lld* /usr/bin/
-# llvm-tblgen
-COPY --from=lld-builder /lld-install/bin/llvm-tblgen /usr/bin/
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-tblgen $(xx-info sysroot)/usr/bin/llvm-tblgen
 
-# llvm-config for cross
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-config $(xx-info sysroot)/usr/bin/llvm-config
+# Copy binary list for use in copy loop
+COPY --from=lld-builder /lld-install/bin/llvm-required-files.txt /tmp/
 
-# Copy llvm-lto binary
-COPY --from=lld-builder /lld-install/bin/llvm-lto /usr/bin/
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-lto $(xx-info sysroot)/usr/bin/llvm-lto
+# Debug print the list of required files
+RUN echo "LLVM tools being copied:" && cat /tmp/llvm-required-files.txt
 
-# LTO shared lib
+# Copy required binaries listed in llvm-required-files.txt
+RUN while read f; do \
+      [ -f "$f" ] && cp "$f" /usr/bin/ && \
+      (! xx-info is-cross || cp -f /usr/bin/$(basename "$f") $(xx-info sysroot)/usr/bin/$(basename "$f")); \
+    done < /tmp/llvm-required-files.txt
+
+# Copy libLTO shared libraries
 COPY --from=lld-builder /lld-install/lib/libLTO.so* /usr/lib/
 RUN ! xx-info is-cross || cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/lib/
-
-# llvm lli
-COPY --from=lld-builder /lld-install/bin/lli /usr/bin/
-RUN ! xx-info is-cross || cp -f /usr/bin/lli $(xx-info sysroot)/usr/bin/lli
-
-# llvm-as
-COPY --from=lld-builder /lld-install/bin/llvm-as /usr/bin/
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-as $(xx-info sysroot)/usr/bin/llvm-as
-
-COPY --from=lld-builder /lld-install/bin/llvm-profdata /usr/bin/
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-profdata $(xx-info sysroot)/usr/bin/llvm-profdata
-
-COPY --from=lld-builder /lld-install/bin/llc /usr/bin/
-RUN ! xx-info is-cross || cp -f /usr/bin/llc $(xx-info sysroot)/usr/bin/llc
-
-# Additional LLVM tools
-COPY --from=lld-builder /lld-install/bin/llvm-ar /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-ranlib /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-nm /usr/bin/
-
-COPY --from=lld-builder /lld-install/bin/bugpoint /usr/bin/
-
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-ar $(xx-info sysroot)/usr/bin/llvm-ar
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-ranlib $(xx-info sysroot)/usr/bin/llvm-ranlib
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-nm $(xx-info sysroot)/usr/bin/llvm-nm
 
 # Patch LLVMConfig for proper sysroot awareness
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
@@ -172,7 +148,6 @@ EOT
 ########################################
 # Stage 4: wasmedge-build
 ########################################
-
 FROM alpine-static AS wasmedge-build
 SHELL ["bash", "-c"]
 
@@ -193,6 +168,7 @@ RUN apk add --no-cache \
 
 COPY --from=alpine-static /usr/bin/xx* /usr/bin/
 
+# Fake dsymutil for CMake sanity
 RUN ln -s /bin/true /usr/bin/dsymutil || true
 
 RUN --mount=type=bind,target=/src,source=. \
