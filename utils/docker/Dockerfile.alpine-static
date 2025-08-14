@@ -30,7 +30,9 @@ RUN apk add --no-cache \
     tar \
     xz \
     zstd-dev \
-    zstd-static
+    zstd-static \
+    file \
+    python3
 
 WORKDIR /lld-build
 
@@ -46,16 +48,21 @@ RUN cmake -B build \
     -DCMAKE_INSTALL_PREFIX=/lld-install \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
+    -DLLVM_INCLUDE_TOOLS=ON \
+    -DLLVM_TOOL_LLVM_TBLGEN_BUILD=ON \
     -DLLVM_TOOL_LTO_BUILD=ON \
     -DLLVM_TOOL_BUGPOINT_BUILD=ON \
     -DLLVM_TOOL_LLI_BUILD=ON \
     llvm
 
 RUN cmake --build build --target install
+
 RUN test -f /lld-install/bin/lli || (echo "Error: lli not installed!" && false)
 
 # Extract list of required binaries from LLVMExports
-RUN grep -oP '(?<=file=").*?/bin/[^"]+' /lld-install/lib/cmake/llvm/LLVMExports.cmake | sort -u > /lld-install/bin/llvm-required-files.txt
+RUN grep -oE 'file="[^"]+/bin/[^"]+"' /lld-install/lib/cmake/llvm/LLVMExports.cmake \
+  | sed -E 's/file="([^"]+)"/\1/' \
+  | sort -u > /lld-install/bin/llvm-required-files.txt
 
 ########################################
 # Stage 3: Alpine Static Image with LLD
