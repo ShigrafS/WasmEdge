@@ -49,6 +49,9 @@ RUN cmake -B build \
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DLLVM_ENABLE_ASSERTIONS=OFF \
     -DLLVM_INCLUDE_TOOLS=ON \
+    -DLLVM_TOOL_LLVM_AR_BUILD=ON \
+    -DLLVM_TOOL_LLVM_NM_BUILD=ON \
+    -DLLVM_TOOL_LLVM_RANLIB_BUILD=ON \
     -DLLVM_TOOL_LLVM_TBLGEN_BUILD=ON \
     -DLLVM_TOOL_LTO_BUILD=ON \
     -DLLVM_TOOL_BUGPOINT_BUILD=ON \
@@ -125,9 +128,16 @@ RUN while read f; do \
 COPY --from=lld-builder /lld-install/lib/libLTO.so* /usr/lib/
 RUN ! xx-info is-cross || cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/lib/
 
-# Explicitly copy llvm-tblgen (not always listed in LLVMExports.cmake)
+# Explicitly copy tools that may not be listed in LLVMExports
 COPY --from=lld-builder /lld-install/bin/llvm-tblgen /usr/bin/
+COPY --from=lld-builder /lld-install/bin/llvm-ar /usr/bin/
+COPY --from=lld-builder /lld-install/bin/llvm-nm /usr/bin/
+COPY --from=lld-builder /lld-install/bin/llvm-ranlib /usr/bin/
+
 RUN ! xx-info is-cross || cp -f /usr/bin/llvm-tblgen $(xx-info sysroot)/usr/bin/llvm-tblgen
+RUN ! xx-info is-cross || cp -f /usr/bin/llvm-ar $(xx-info sysroot)/usr/bin/llvm-ar
+RUN ! xx-info is-cross || cp -f /usr/bin/llvm-nm $(xx-info sysroot)/usr/bin/llvm-nm
+RUN ! xx-info is-cross || cp -f /usr/bin/llvm-ranlib $(xx-info sysroot)/usr/bin/llvm-ranlib
 
 # Patch LLVMConfig for proper sysroot awareness
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
