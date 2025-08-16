@@ -119,14 +119,18 @@ COPY --from=lld-builder /lld-install/bin/llvm-required-files.txt /tmp/
 RUN echo "LLVM tools being copied:" && cat /tmp/llvm-required-files.txt
 
 # Copy required binaries listed in llvm-required-files.txt
-RUN while read f; do \
-      [ -f "$f" ] && cp "$f" /usr/bin/ && \
-      (! xx-info is-cross || cp -f /usr/bin/$(basename "$f") $(xx-info sysroot)/usr/bin/$(basename "$f")); \
+RUN while read -r f; do \
+      if [ -f "$f" ]; then \
+        cp "$f" /usr/bin/; \
+        if xx-info is-cross; then \
+          cp -f /usr/bin/$(basename "$f") $(xx-info sysroot)/usr/bin/$(basename "$f"); \
+        fi; \
+      fi; \
     done < /tmp/llvm-required-files.txt
 
 # Copy libLTO shared libraries
 COPY --from=lld-builder /lld-install/lib/libLTO.so* /usr/lib/
-RUN ! xx-info is-cross || cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/lib/
+RUN if xx-info is-cross; then cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/lib/; fi
 
 # Explicitly copy tools that may not be listed in LLVMExports
 COPY --from=lld-builder /lld-install/bin/llvm-tblgen /usr/bin/
@@ -135,11 +139,11 @@ COPY --from=lld-builder /lld-install/bin/llvm-nm /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-ranlib /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-config /usr/bin/
 
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-tblgen $(xx-info sysroot)/usr/bin/llvm-tblgen
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-ar $(xx-info sysroot)/usr/bin/llvm-ar
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-nm $(xx-info sysroot)/usr/bin/llvm-nm
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-ranlib $(xx-info sysroot)/usr/bin/llvm-ranlib
-RUN ! xx-info is-cross || cp -f /usr/bin/llvm-config $(xx-info sysroot)/usr/bin/llvm-config
+RUN if xx-info is-cross; then cp -f /usr/bin/llvm-tblgen $(xx-info sysroot)/usr/bin/llvm-tblgen; fi
+RUN if xx-info is-cross; then cp -f /usr/bin/llvm-ar $(xx-info sysroot)/usr/bin/llvm-ar; fi
+RUN if xx-info is-cross; then cp -f /usr/bin/llvm-nm $(xx-info sysroot)/usr/bin/llvm-nm; fi
+RUN if xx-info is-cross; then cp -f /usr/bin/llvm-ranlib $(xx-info sysroot)/usr/bin/llvm-ranlib; fi
+RUN if xx-info is-cross; then cp -f /usr/bin/llvm-config $(xx-info sysroot)/usr/bin/llvm-config; fi
 
 # Patch LLVMConfig for proper sysroot awareness
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
@@ -192,7 +196,7 @@ RUN apk add --no-cache \
 COPY --from=alpine-static /usr/bin/xx* /usr/bin/
 
 # Fake dsymutil for CMake sanity
-RUN ln -s /bin/true /usr/bin/dsymutil || true
+RUN ln -sf /bin/true /usr/bin/dsymutil
 
 RUN --mount=type=bind,target=/src,source=. \
     cmake -S /src -B /build -G Ninja \
