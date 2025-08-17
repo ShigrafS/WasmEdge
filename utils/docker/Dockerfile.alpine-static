@@ -141,7 +141,9 @@ COPY --from=lld-builder /lld-install/bin/llvm-ranlib /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-config /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-lto /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-profdata /usr/bin/
+COPY --from=lld-builder /lld-install/bin/bugpoint /usr/bin/
 
+RUN if xx-info is-cross; then cp -f /usr/bin/bugpoint $(xx-info sysroot)/usr/bin/bugpoint; fi
 RUN if xx-info is-cross; then cp -f /usr/bin/llvm-profdata $(xx-info sysroot)/usr/bin/llvm-profdata; fi
 RUN if xx-info is-cross; then cp -f /usr/bin/llvm-lto $(xx-info sysroot)/usr/bin/llvm-lto; fi
 RUN if xx-info is-cross; then cp -f /usr/bin/llvm-tblgen $(xx-info sysroot)/usr/bin/llvm-tblgen; fi
