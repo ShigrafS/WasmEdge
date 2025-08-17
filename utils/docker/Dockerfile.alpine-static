@@ -55,7 +55,6 @@ RUN cmake -B build \
     -DLLVM_TOOL_LLVM_TBLGEN_BUILD=ON \
     -DLLVM_TOOL_LTO_BUILD=ON \
     -DLLVM_TOOL_BUGPOINT_BUILD=ON \
-    -DLLVM_TOOL_LLVM_LTO_BUILD=ON \
     -DLLVM_TOOL_LLI_BUILD=ON \
     llvm
 
@@ -139,7 +138,9 @@ COPY --from=lld-builder /lld-install/bin/llvm-ar /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-nm /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-ranlib /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-config /usr/bin/
+COPY --from=lld-builder /lld-install/bin/llvm-lto /usr/bin/
 
+RUN if xx-info is-cross; then cp -f /usr/bin/llvm-lto $(xx-info sysroot)/usr/bin/llvm-lto; fi
 RUN if xx-info is-cross; then cp -f /usr/bin/llvm-tblgen $(xx-info sysroot)/usr/bin/llvm-tblgen; fi
 RUN if xx-info is-cross; then cp -f /usr/bin/llvm-ar $(xx-info sysroot)/usr/bin/llvm-ar; fi
 RUN if xx-info is-cross; then cp -f /usr/bin/llvm-nm $(xx-info sysroot)/usr/bin/llvm-nm; fi
