@@ -40,6 +40,7 @@ RUN git clone --depth=1 --branch=release/18.x https://github.com/llvm/llvm-proje
 
 WORKDIR /lld-build/llvm-project
 
+# 🟢 ADDED: LLVM_TOOL_LLVM_AS_BUILD=ON
 RUN cmake -B build \
     -G Ninja \
     -DLLVM_ENABLE_PROJECTS="clang;llvm;lld" \
@@ -57,6 +58,7 @@ RUN cmake -B build \
     -DLLVM_TOOL_LTO_BUILD=ON \
     -DLLVM_TOOL_BUGPOINT_BUILD=ON \
     -DLLVM_TOOL_LLI_BUILD=ON \
+    -DLLVM_TOOL_LLVM_AS_BUILD=ON \    
     llvm
 
 RUN cmake --build build --target install
@@ -137,7 +139,9 @@ RUN if xx-info is-cross; then cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/l
 COPY --from=lld-builder /lld-install/bin/lli /usr/bin/
 RUN if xx-info is-cross; then cp -f /usr/bin/lli $(xx-info sysroot)/usr/bin/lli; fi
 
-# Explicitly copy tools that may not be listed in LLVMExports
+COPY --from=lld-builder /lld-install/bin/llvm-as /usr/bin/
+RUN if xx-info is-cross; then cp -f /usr/bin/llvm-as $(xx-info sysroot)/usr/bin/llvm-as; fi
+
 COPY --from=lld-builder /lld-install/bin/llvm-tblgen /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-ar /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-nm /usr/bin/
@@ -149,6 +153,7 @@ COPY --from=lld-builder /lld-install/bin/bugpoint /usr/bin/
 
 # Explicitly copy llc, which may not be included in auto-discovered files
 COPY --from=lld-builder /lld-install/bin/llc /usr/bin/
+
 RUN if xx-info is-cross; then cp -f /usr/bin/llc $(xx-info sysroot)/usr/bin/llc; fi
 
 RUN if xx-info is-cross; then cp -f /usr/bin/bugpoint $(xx-info sysroot)/usr/bin/bugpoint; fi
