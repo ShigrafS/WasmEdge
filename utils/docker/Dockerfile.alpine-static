@@ -58,7 +58,8 @@ RUN cmake -B build \
     -DLLVM_TOOL_LTO_BUILD=ON \
     -DLLVM_TOOL_BUGPOINT_BUILD=ON \
     -DLLVM_TOOL_LLI_BUILD=ON \
-    -DLLVM_TOOL_LLVM_AS_BUILD=ON \    
+    -DLLVM_TOOL_LLVM_BCANALYZER_BUILD=ON \
+    -DLLVM_TOOL_LLVM_AS_BUILD=ON \
     llvm
 
 RUN cmake --build build --target install
@@ -151,6 +152,8 @@ COPY --from=lld-builder /lld-install/bin/llvm-lto /usr/bin/
 COPY --from=lld-builder /lld-install/bin/llvm-profdata /usr/bin/
 COPY --from=lld-builder /lld-install/bin/bugpoint /usr/bin/
 
+COPY --from=lld-builder /lld-build/llvm-project/build/bin/llvm-bcanalyzer /usr/bin/
+RUN if xx-info is-cross; then cp -f /usr/bin/llvm-bcanalyzer $(xx-info sysroot)/usr/bin/llvm-bcanalyzer; fi
 # Explicitly copy llc, which may not be included in auto-discovered files
 COPY --from=lld-builder /lld-install/bin/llc /usr/bin/
 
