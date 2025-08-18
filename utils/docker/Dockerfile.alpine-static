@@ -61,12 +61,11 @@ RUN cmake -B build \
 
 RUN cmake --build build --target install
 
-RUN test -f /lld-install/bin/lli || (echo "Error: lli not installed!" && false)
+# ✅ Copy all built tools, even if not installed via 'install' target
+RUN find build/bin -type f -executable -exec cp -v {} /lld-install/bin/ \;
 
-# Extract list of required binaries from LLVMExports
-RUN grep -oE 'file="[^"]+/bin/[^"]+"' /lld-install/lib/cmake/llvm/LLVMExports.cmake \
-  | sed -E 's/file="([^"]+)"/\1/' \
-  | sort -u > /lld-install/bin/llvm-required-files.txt
+# Confirm lli is present
+RUN test -f /lld-install/bin/lli || (echo "Error: lli not installed!" && false)
 
 ########################################
 # Stage 3: Alpine Static Image with LLD
@@ -78,13 +77,10 @@ LABEL description="Alpine ${ALPINE_VERSION} with LLD and static toolchain"
 
 COPY --from=xx /usr/bin/xx* /usr/bin/
 
-# Install bash so we can use SHELL
 RUN apk add --no-cache bash
 
-# Set bash for all future RUN commands
 SHELL ["bash", "-c"]
 
-# Install static toolchain and build dependencies
 RUN apk add --no-cache \
     cmake \
     samurai \
@@ -99,66 +95,26 @@ RUN apk add --no-cache \
     libc-dev \
     libffi-dev
 
-# Ensure necessary directories exist
 RUN mkdir -p /usr/lib/llvm/lib /usr/lib/cmake/llvm $(xx-info sysroot)/usr/bin
 
-# Copy LLVM static libraries
+# Copy LLVM + LLD static libraries
 COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/
 COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/llvm/lib/
-
-# Copy LLD static libraries
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/
 COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
 
 # Copy LLVM CMake config directory
 COPY --from=lld-builder /lld-install/lib/cmake/llvm /usr/lib/cmake/llvm
 
-# Copy binary list for use in copy loop
-COPY --from=lld-builder /lld-install/bin/llvm-required-files.txt /tmp/
+# ✅ Copy ALL binaries that were built
+COPY --from=lld-builder /lld-install/bin/* /usr/bin/
 
-# Debug print the list of required files
-RUN echo "LLVM tools being copied:" && cat /tmp/llvm-required-files.txt
-
-# Copy required binaries listed in llvm-required-files.txt
-RUN while read -r f; do \
-      if [ -f "$f" ]; then \
-        cp "$f" /usr/bin/; \
-        if xx-info is-cross; then \
-          cp -f /usr/bin/$(basename "$f") $(xx-info sysroot)/usr/bin/$(basename "$f"); \
-        fi; \
-      fi; \
-    done < /tmp/llvm-required-files.txt
+# Cross-copy all tools if cross-compiling
+RUN if xx-info is-cross; then cp -f /usr/bin/* $(xx-info sysroot)/usr/bin/; fi
 
 # Copy libLTO shared libraries
 COPY --from=lld-builder /lld-install/lib/libLTO.so* /usr/lib/
 RUN if xx-info is-cross; then cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/lib/; fi
-
-# Explicitly copy lli
-COPY --from=lld-builder /lld-install/bin/lli /usr/bin/
-RUN if xx-info is-cross; then cp -f /usr/bin/lli $(xx-info sysroot)/usr/bin/lli; fi
-
-# Explicitly copy tools that may not be listed in LLVMExports
-COPY --from=lld-builder /lld-install/bin/llvm-tblgen /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-ar /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-nm /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-ranlib /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-config /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-lto /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-profdata /usr/bin/
-COPY --from=lld-builder /lld-install/bin/bugpoint /usr/bin/
-
-# Explicitly copy llc, which may not be included in auto-discovered files
-COPY --from=lld-builder /lld-install/bin/llc /usr/bin/
-RUN if xx-info is-cross; then cp -f /usr/bin/llc $(xx-info sysroot)/usr/bin/llc; fi
-
-RUN if xx-info is-cross; then cp -f /usr/bin/bugpoint $(xx-info sysroot)/usr/bin/bugpoint; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-profdata $(xx-info sysroot)/usr/bin/llvm-profdata; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-lto $(xx-info sysroot)/usr/bin/llvm-lto; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-tblgen $(xx-info sysroot)/usr/bin/llvm-tblgen; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-ar $(xx-info sysroot)/usr/bin/llvm-ar; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-nm $(xx-info sysroot)/usr/bin/llvm-nm; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-ranlib $(xx-info sysroot)/usr/bin/llvm-ranlib; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-config $(xx-info sysroot)/usr/bin/llvm-config; fi
 
 # Patch LLVMConfig for proper sysroot awareness
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
