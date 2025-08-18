@@ -56,12 +56,13 @@ RUN cmake -B build \
     -DLLVM_TOOL_LLVM_PROFDATA_BUILD=ON \
     -DLLVM_TOOL_LTO_BUILD=ON \
     -DLLVM_TOOL_BUGPOINT_BUILD=ON \
+    -DLLVM_TOOL_LLVM_BCANALYZER_BUILD=ON \
     -DLLVM_TOOL_LLI_BUILD=ON \
     llvm
 
 RUN cmake --build build --target install
 
-# ✅ Copy all built tools, even if not installed via 'install' target
+# Copy all built tools, even if not installed via 'install' target
 RUN find build/bin -type f -executable -exec cp -v {} /lld-install/bin/ \;
 
 # Confirm lli is present
