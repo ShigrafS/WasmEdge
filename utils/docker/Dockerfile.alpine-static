@@ -58,6 +58,9 @@ RUN cmake -B build \
     -DLLVM_TOOL_BUGPOINT_BUILD=ON \
     -DLLVM_TOOL_LLVM_BCANALYZER_BUILD=ON \
     -DLLVM_TOOL_LLI_BUILD=ON \
+    -DLLVM_BUILD_LLVM_DYLIB=OFF \
+    -DLLVM_LINK_LLVM_DYLIB=OFF \
+    -DLLVM_ENABLE_DYLIB=OFF \
     llvm
 
 RUN cmake --build build --target install
