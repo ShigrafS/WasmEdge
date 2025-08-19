@@ -58,9 +58,6 @@ RUN cmake -B build \
     -DLLVM_TOOL_BUGPOINT_BUILD=ON \
     -DLLVM_TOOL_LLVM_BCANALYZER_BUILD=ON \
     -DLLVM_TOOL_LLI_BUILD=ON \
-    -DLLVM_BUILD_LLVM_DYLIB=OFF \
-    -DLLVM_LINK_LLVM_DYLIB=OFF \
-    -DLLVM_ENABLE_DYLIB=OFF \
     llvm
 
 RUN cmake --build build --target install
@@ -75,9 +72,6 @@ RUN test -f /lld-install/bin/lli || (echo "Error: lli not installed!" && false)
 # Stage 3: Alpine Static Image with LLD
 ########################################
 FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS alpine-static
-
-LABEL maintainer="you@example.com"
-LABEL description="Alpine ${ALPINE_VERSION} with LLD and static toolchain"
 
 COPY --from=xx /usr/bin/xx* /usr/bin/
 
@@ -101,19 +95,10 @@ RUN apk add --no-cache \
 
 RUN mkdir -p /usr/lib/llvm/lib /usr/lib/cmake/llvm $(xx-info sysroot)/usr/bin
 
-# Copy LLVM + LLD static libraries
-COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/
-COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/llvm/lib/
-COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/
-COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
+COPY --from=lld-builder /lld-install/lib/ /usr/lib/
+COPY --from=lld-builder /lld-install/bin/ /usr/bin/
+COPY --from=lld-builder /lld-install/lib/cmake/ /usr/lib/cmake/
 
-# Copy LLVM CMake config directory
-COPY --from=lld-builder /lld-install/lib/cmake/llvm /usr/lib/cmake/llvm
-
-# ✅ Copy ALL binaries that were built
-COPY --from=lld-builder /lld-install/bin/* /usr/bin/
-
-# Cross-copy all tools if cross-compiling
 RUN if xx-info is-cross; then cp -f /usr/bin/* $(xx-info sysroot)/usr/bin/; fi
 
 # Copy libLTO shared libraries
@@ -151,6 +136,7 @@ EOT
 # Stage 4: wasmedge-build
 ########################################
 FROM alpine-static AS wasmedge-build
+
 SHELL ["bash", "-c"]
 
 ARG TARGETPLATFORM
