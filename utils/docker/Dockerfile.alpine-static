@@ -155,26 +155,29 @@ RUN apk add --no-cache \
     zstd-static
 
 # Standard headers into sysroot
-RUN xx-apk add musl-dev libc-dev
+# The fix: Correctly install the C++ development package for the target.
+RUN xx-apk add musl-dev libc-dev g++
 
 # Fake dsymutil for CMake sanity
 RUN ln -sf /bin/true /usr/bin/dsymutil
 
 # Optional sanity check for stdlib.h
 RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not found in sysroot!" && false)
-
-# Fake dsymutil
-RUN ln -sf /bin/true /usr/bin/dsymutil
+# Also check for C++ headers to ensure the new package was installed correctly
+RUN test -f "$(xx-info sysroot)/usr/include/c++/$(ls "$(xx-info sysroot)"/usr/include/c++/)/cstdlib" || (echo "C++ cstdlib header not found in sysroot!" && false)
 
 # CMake with explicit sysroot & include path flags
+# The fix: Add an explicit include path to the C++ standard library headers.
 RUN --mount=type=bind,target=/src,source=. \
+    GCC_TRIPLE=$(ls -d "$(xx-info sysroot)"/usr/lib/gcc/* | xargs basename) && \
+    GCC_VERSION=$(ls -d "$(xx-info sysroot)"/usr/lib/gcc/"${GCC_TRIPLE}"/* | xargs basename) && \
     cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX="/install" \
         -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
         -DCMAKE_PREFIX_PATH="$(xx-info sysroot)/usr/lib/cmake/llvm" \
-        -DCMAKE_CXX_FLAGS="--sysroot=$(xx-info sysroot) -I$(xx-info sysroot)/usr/include" \
+        -DCMAKE_CXX_FLAGS="--sysroot=$(xx-info sysroot) -I$(xx-info sysroot)/usr/include -I$(xx-info sysroot)/usr/lib/gcc/${GCC_TRIPLE}/${GCC_VERSION}/include/c++" \
         -DCMAKE_C_FLAGS="--sysroot=$(xx-info sysroot) -I$(xx-info sysroot)/usr/include" \
         -DWASMEDGE_BUILD_PACKAGE="TGZ" \
         -DWASMEDGE_USE_LLVM=ON \
