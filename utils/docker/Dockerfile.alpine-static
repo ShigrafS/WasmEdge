@@ -3,7 +3,7 @@
 ARG ALPINE_VERSION=3.22
 
 ########################################
-# Stage 1: xx (cross-compilation tool)
+# Stage 1: Cross-compilation tool
 ########################################
 FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
 
@@ -58,6 +58,7 @@ RUN cmake -B build \
     -DLLVM_TOOL_BUGPOINT_BUILD=ON \
     -DLLVM_TOOL_LLVM_BCANALYZER_BUILD=ON \
     -DLLVM_TOOL_LLI_BUILD=ON \
+    -DLLVM_TOOL_LLI_BUILD=ON \
     llvm
 
 RUN cmake --build build --target install
@@ -74,7 +75,6 @@ RUN test -f /lld-install/bin/lli || (echo "Error: lli not installed!" && false)
 FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS alpine-static
 
 COPY --from=xx /usr/bin/xx* /usr/bin/
-
 RUN apk add --no-cache bash
 
 SHELL ["bash", "-c"]
@@ -133,18 +133,17 @@ echo "$TOOLCHAIN_FILE"
 EOT
 
 ########################################
-# Stage 4: wasmedge-build
+# Stage 4: wasmedge-build with sysroot & include fixes
 ########################################
 FROM alpine-static AS wasmedge-build
-
-SHELL ["bash", "-c"]
 
 ARG TARGETPLATFORM
 ARG ALPINE_VERSION
 
 WORKDIR /src
+SHELL ["bash", "-c"]
 
-# Install host-side tools
+# Host tools
 RUN apk add --no-cache \
     curl \
     tar \
@@ -155,7 +154,7 @@ RUN apk add --no-cache \
     zstd-dev \
     zstd-static
 
-# Install standard headers into sysroot for cross-compilation
+# Standard headers into sysroot
 RUN xx-apk add musl-dev libc-dev
 
 # Fake dsymutil for CMake sanity
@@ -164,7 +163,10 @@ RUN ln -sf /bin/true /usr/bin/dsymutil
 # Optional sanity check for stdlib.h
 RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not found in sysroot!" && false)
 
-# Run CMake configuration
+# Fake dsymutil
+RUN ln -sf /bin/true /usr/bin/dsymutil
+
+# CMake with explicit sysroot & include path flags
 RUN --mount=type=bind,target=/src,source=. \
     cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
@@ -172,6 +174,8 @@ RUN --mount=type=bind,target=/src,source=. \
         -DCMAKE_INSTALL_PREFIX="/install" \
         -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
         -DCMAKE_PREFIX_PATH="$(xx-info sysroot)/usr/lib/cmake/llvm" \
+        -DCMAKE_CXX_FLAGS="--sysroot=$(xx-info sysroot) -I$(xx-info sysroot)/usr/include" \
+        -DCMAKE_C_FLAGS="--sysroot=$(xx-info sysroot) -I$(xx-info sysroot)/usr/include" \
         -DWASMEDGE_BUILD_PACKAGE="TGZ" \
         -DWASMEDGE_USE_LLVM=ON \
         -DWASMEDGE_BUILD_STATIC_LIB=ON \
@@ -189,5 +193,4 @@ RUN --mount=type=bind,target=/src,source=. \
     cmake --build /build -- install package
 
 WORKDIR /src
-
 CMD ["/bin/bash"]
