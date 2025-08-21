@@ -109,6 +109,7 @@ RUN if xx-info is-cross; then cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/l
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
 
 # Add xx-toolchain helper
+# CRITICAL CHANGE: Set CMAKE_C_COMPILER and CMAKE_CXX_COMPILER to use xx-clang directly.
 RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 #!/bin/bash
 mkdir -p /etc/xx-toolchains/
@@ -119,9 +120,9 @@ set(CMAKE_SYSROOT "$(xx-info sysroot)")
 set(CMAKE_SYSTEM_NAME "Linux")
 set(CMAKE_SYSTEM_VERSION 1)
 set(CMAKE_SYSTEM_PROCESSOR "$(xx-info march)")
-set(CMAKE_C_COMPILER "$(which clang)")
-set(CMAKE_CXX_COMPILER "$(which clang++)")
-set(CMAKE_ASM_COMPILER "$(which clang)")
+set(CMAKE_C_COMPILER "$(which xx-clang)")
+set(CMAKE_CXX_COMPILER "$(which xx-clang++)")
+set(CMAKE_ASM_COMPILER "$(which xx-clang)")
 set(CMAKE_AR "$(which ar)")
 set(CMAKE_RANLIB "$(which ranlib)")
 set(PKG_CONFIG_EXECUTABLE "$(xx-clang --print-prog-name=pkg-config)")
@@ -155,7 +156,7 @@ RUN apk add --no-cache \
     zstd-static
 
 # Standard headers into sysroot
-# The fix: Correctly install the C++ development package for the target.
+# Corrected package name: using 'g++' instead of 'g++-dev' for Alpine
 RUN xx-apk add musl-dev libc-dev g++
 
 # Fake dsymutil for CMake sanity
@@ -167,7 +168,8 @@ RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not fou
 RUN test -f "$(xx-info sysroot)/usr/include/c++/$(ls "$(xx-info sysroot)"/usr/include/c++/)/cstdlib" || (echo "C++ cstdlib header not found in sysroot!" && false)
 
 # CMake with explicit sysroot & include path flags
-# The fix: Add an explicit include path to the C++ standard library headers.
+# CRITICAL CHANGE: Removed --sysroot from CMAKE_C_FLAGS and CMAKE_CXX_FLAGS,
+# as xx-clang is now expected to handle this correctly.
 RUN --mount=type=bind,target=/src,source=. \
     GCC_TRIPLE=$(ls -d "$(xx-info sysroot)"/usr/lib/gcc/* | xargs basename) && \
     GCC_VERSION=$(ls -d "$(xx-info sysroot)"/usr/lib/gcc/"${GCC_TRIPLE}"/* | xargs basename) && \
@@ -177,8 +179,8 @@ RUN --mount=type=bind,target=/src,source=. \
         -DCMAKE_INSTALL_PREFIX="/install" \
         -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
         -DCMAKE_PREFIX_PATH="$(xx-info sysroot)/usr/lib/cmake/llvm" \
-        -DCMAKE_CXX_FLAGS="--sysroot=$(xx-info sysroot) -I$(xx-info sysroot)/usr/include -I$(xx-info sysroot)/usr/lib/gcc/${GCC_TRIPLE}/${GCC_VERSION}/include/c++" \
-        -DCMAKE_C_FLAGS="--sysroot=$(xx-info sysroot) -I$(xx-info sysroot)/usr/include" \
+        -DCMAKE_CXX_FLAGS="-I$(xx-info sysroot)/usr/include -I$(xx-info sysroot)/usr/lib/gcc/${GCC_TRIPLE}/${GCC_VERSION}/include/c++" \
+        -DCMAKE_C_FLAGS="-I$(xx-info sysroot)/usr/include" \
         -DWASMEDGE_BUILD_PACKAGE="TGZ" \
         -DWASMEDGE_USE_LLVM=ON \
         -DWASMEDGE_BUILD_STATIC_LIB=ON \
