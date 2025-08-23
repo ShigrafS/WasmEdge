@@ -109,7 +109,10 @@ RUN if xx-info is-cross; then cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/l
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
 
 # Add xx-toolchain helper
-# CRITICAL CHANGE: Set CMAKE_C_COMPILER and CMAKE_CXX_COMPILER to use xx-clang directly.
+# CRITICAL CHANGES:
+# - Set CMAKE_C_COMPILER and CMAKE_CXX_COMPILER to use xx-clang directly.
+# - Add CMAKE_FIND_ROOT_PATH_MODE_* to ensure CMake only searches within the sysroot.
+# - Add CMAKE_*_COMPILER_FORCED to prevent problematic compiler probes.
 RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 #!/bin/bash
 mkdir -p /etc/xx-toolchains/
@@ -129,6 +132,14 @@ set(PKG_CONFIG_EXECUTABLE "$(xx-clang --print-prog-name=pkg-config)")
 set(CMAKE_C_COMPILER_TARGET "$(xx-clang --print-target-triple)")
 set(CMAKE_CXX_COMPILER_TARGET "$(xx-clang --print-target-triple)")
 set(CMAKE_ASM_COMPILER_TARGET "$(xx-clang --print-target-triple)")
+
+# Crucial additions for robust cross-compilation with CMake
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+set(CMAKE_C_COMPILER_FORCED TRUE)
+set(CMAKE_CXX_COMPILER_FORCED TRUE)
 EOF
 echo "$TOOLCHAIN_FILE"
 EOT
@@ -168,9 +179,11 @@ RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not fou
 RUN test -f "$(xx-info sysroot)/usr/include/c++/$(ls "$(xx-info sysroot)"/usr/include/c++/)/cstdlib" || (echo "C++ cstdlib header not found in sysroot!" && false)
 
 # CMake with explicit sysroot & include path flags
-# CRITICAL CHANGE: Removed --sysroot from CMAKE_C_FLAGS and CMAKE_CXX_FLAGS,
-# as xx-clang is now expected to handle this correctly.
+# CRITICAL CHANGE: Removed all explicit CMAKE_C_FLAGS and CMAKE_CXX_FLAGS,
+# relying entirely on xx-toolchain and xx-clang to manage include paths.
 RUN --mount=type=bind,target=/src,source=. \
+    # GCC_TRIPLE and GCC_VERSION variables are not directly used in CMAKE_CXX_FLAGS anymore,
+    # but could be useful for debugging or other specific needs if re-introduced.
     GCC_TRIPLE=$(ls -d "$(xx-info sysroot)"/usr/lib/gcc/* | xargs basename) && \
     GCC_VERSION=$(ls -d "$(xx-info sysroot)"/usr/lib/gcc/"${GCC_TRIPLE}"/* | xargs basename) && \
     cmake -S /src -B /build -G Ninja \
@@ -179,8 +192,6 @@ RUN --mount=type=bind,target=/src,source=. \
         -DCMAKE_INSTALL_PREFIX="/install" \
         -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
         -DCMAKE_PREFIX_PATH="$(xx-info sysroot)/usr/lib/cmake/llvm" \
-        -DCMAKE_CXX_FLAGS="-I$(xx-info sysroot)/usr/include -I$(xx-info sysroot)/usr/lib/gcc/${GCC_TRIPLE}/${GCC_VERSION}/include/c++" \
-        -DCMAKE_C_FLAGS="-I$(xx-info sysroot)/usr/include" \
         -DWASMEDGE_BUILD_PACKAGE="TGZ" \
         -DWASMEDGE_USE_LLVM=ON \
         -DWASMEDGE_BUILD_STATIC_LIB=ON \
