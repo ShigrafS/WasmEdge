@@ -167,7 +167,6 @@ RUN apk add --no-cache \
     zstd-static
 
 # Standard headers into sysroot
-# Corrected package name: using 'g++' instead of 'g++-dev' for Alpine
 RUN xx-apk add musl-dev libc-dev g++
 
 # Fake dsymutil for CMake sanity
@@ -178,19 +177,32 @@ RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not fou
 # Also check for C++ headers to ensure the new package was installed correctly
 RUN test -f "$(xx-info sysroot)/usr/include/c++/$(ls "$(xx-info sysroot)"/usr/include/c++/)/cstdlib" || (echo "C++ cstdlib header not found in sysroot!" && false)
 
-# CMake with explicit sysroot & include path flags
-# CRITICAL CHANGE: Removed all explicit CMAKE_C_FLAGS and CMAKE_CXX_FLAGS,
-# relying entirely on xx-toolchain and xx-clang to manage include paths.
+# CRITICAL FIX: Explicitly define C/CXX flags to force the compiler
+# to look for headers ONLY inside the target sysroot. This overrides
+# any incorrect host paths (-isystem /usr/include) that the WasmEdge
+# CMake scripts might be trying to add.
 RUN --mount=type=bind,target=/src,source=. \
-    # GCC_TRIPLE and GCC_VERSION variables are not directly used in CMAKE_CXX_FLAGS anymore,
-    # but could be useful for debugging or other specific needs if re-introduced.
-    GCC_TRIPLE=$(ls -d "$(xx-info sysroot)"/usr/lib/gcc/* | xargs basename) && \
-    GCC_VERSION=$(ls -d "$(xx-info sysroot)"/usr/lib/gcc/"${GCC_TRIPLE}"/* | xargs basename) && \
+    # First, determine the exact paths for the target's C++ headers
+    SYSROOT_PATH=$(xx-info sysroot) && \
+    GCC_TRIPLE=$(xx-clang --print-target-triple) && \
+    # Find the C++ version directory (e.g., 14.2.0) inside the sysroot
+    CXX_VERSION_DIR=$(ls -d "${SYSROOT_PATH}"/usr/include/c++/* | head -n 1) && \
+    CXX_VERSION=$(basename "${CXX_VERSION_DIR}") && \
+    \
+    # Construct the flags with multiple -isystem entries. Order can matter.
+    # We point to the generic C headers, the main C++ headers, and the arch-specific C++ headers.
+    export CMAKE_FLAGS="-isystem ${SYSROOT_PATH}/usr/include \
+                        -isystem ${SYSROOT_PATH}/usr/include/c++/${CXX_VERSION} \
+                        -isystem ${SYSROOT_PATH}/usr/include/c++/${CXX_VERSION}/${GCC_TRIPLE}" && \
+    \
     cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX="/install" \
         -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
+        # Apply our meticulously constructed flags
+        -DCMAKE_C_FLAGS="${CMAKE_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${CMAKE_FLAGS}" \
         -DCMAKE_PREFIX_PATH="$(xx-info sysroot)/usr/lib/cmake/llvm" \
         -DWASMEDGE_BUILD_PACKAGE="TGZ" \
         -DWASMEDGE_USE_LLVM=ON \
