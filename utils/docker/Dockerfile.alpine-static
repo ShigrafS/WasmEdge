@@ -145,7 +145,7 @@ echo "$TOOLCHAIN_FILE"
 EOT
 
 ########################################
-# Stage 4: wasmedge-build with sysroot & include fixes
+# Stage 4: wasmedge-build with sysroot
 ########################################
 FROM alpine-static AS wasmedge-build
 
@@ -166,43 +166,45 @@ RUN apk add --no-cache \
     zstd-dev \
     zstd-static
 
-# Standard headers into sysroot
+# Standard headers and C++ libraries into sysroot
 RUN xx-apk add musl-dev libc-dev g++
 
 # Fake dsymutil for CMake sanity
 RUN ln -sf /bin/true /usr/bin/dsymutil
 
-# Optional sanity check for stdlib.h
+# Sanity checks
 RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not found in sysroot!" && false)
-# Also check for C++ headers to ensure the new package was installed correctly
 RUN test -f "$(xx-info sysroot)/usr/include/c++/$(ls "$(xx-info sysroot)"/usr/include/c++/)/cstdlib" || (echo "C++ cstdlib header not found in sysroot!" && false)
 
-# CRITICAL FIX: Explicitly define C/CXX flags to force the compiler
-# to look for headers ONLY inside the target sysroot. This overrides
-# any incorrect host paths (-isystem /usr/include) that the WasmEdge
-# CMake scripts might be trying to add.
+# CRITICAL FIX 2.0: Define C/CXX flags for headers AND Linker flags for libraries.
 RUN --mount=type=bind,target=/src,source=. \
-    # First, determine the exact paths for the target's C++ headers
+    # --- Part 1: Discover paths within the sysroot ---
     SYSROOT_PATH=$(xx-info sysroot) && \
     GCC_TRIPLE=$(xx-clang --print-target-triple) && \
-    # Find the C++ version directory (e.g., 14.2.0) inside the sysroot
     CXX_VERSION_DIR=$(ls -d "${SYSROOT_PATH}"/usr/include/c++/* | head -n 1) && \
     CXX_VERSION=$(basename "${CXX_VERSION_DIR}") && \
     \
-    # Construct the flags with multiple -isystem entries. Order can matter.
-    # We point to the generic C headers, the main C++ headers, and the arch-specific C++ headers.
-    export CMAKE_FLAGS="-isystem ${SYSROOT_PATH}/usr/include \
-                        -isystem ${SYSROOT_PATH}/usr/include/c++/${CXX_VERSION} \
-                        -isystem ${SYSROOT_PATH}/usr/include/c++/${CXX_VERSION}/${GCC_TRIPLE}" && \
+    # --- Part 2: Construct flags for the COMPILER ---
+    # This tells the compiler where to find headers like <vector>, <filesystem>, etc.
+    export COMPILE_FLAGS="-isystem ${SYSROOT_PATH}/usr/include \
+                          -isystem ${SYSROOT_PATH}/usr/include/c++/${CXX_VERSION} \
+                          -isystem ${SYSROOT_PATH}/usr/include/c++/${CXX_VERSION}/${GCC_TRIPLE}" && \
+    \
+    # --- Part 3: Construct flags for the LINKER ---
+    # This tells the linker where to find libraries (-L) and which ones to link (-l).
+    # This is the key to solving the std::filesystem issue.
+    export LINKER_FLAGS="-L${SYSROOT_PATH}/usr/lib/gcc/${GCC_TRIPLE}/${CXX_VERSION} -lstdc++fs" && \
     \
     cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX="/install" \
         -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
-        # Apply our meticulously constructed flags
-        -DCMAKE_C_FLAGS="${CMAKE_FLAGS}" \
-        -DCMAKE_CXX_FLAGS="${CMAKE_FLAGS}" \
+        # Apply our compiler flags
+        -DCMAKE_C_FLAGS="${COMPILE_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMPILE_FLAGS}" \
+        # Apply our new linker flags
+        -DCMAKE_EXE_LINKER_FLAGS="${LINKER_FLAGS}" \
         -DCMAKE_PREFIX_PATH="$(xx-info sysroot)/usr/lib/cmake/llvm" \
         -DWASMEDGE_BUILD_PACKAGE="TGZ" \
         -DWASMEDGE_USE_LLVM=ON \
