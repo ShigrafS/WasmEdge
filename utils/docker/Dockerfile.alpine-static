@@ -108,7 +108,7 @@ RUN if xx-info is-cross; then cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/l
 # Patch LLVMConfig for proper sysroot awareness
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
 
-# CRITICAL CHANGE: Create a comprehensive, robust toolchain file generator
+# CRITICAL CHANGE: Redirect the diagnostic echo to stderr (>&2).
 RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 #!/bin/bash
 set -e
@@ -119,7 +119,8 @@ TOOLCHAIN_FILE="/etc/xx-toolchains/${TARGET_TRIPLE}.cmake"
 # Only generate the file if it doesn't exist
 if [ ! -f "$TOOLCHAIN_FILE" ]; then
     mkdir -p "$(dirname "$TOOLCHAIN_FILE")"
-    echo "--- Generating CMake toolchain file for ${TARGET_TRIPLE} ---"
+    # This now prints to standard error, and will not be captured by $(...)
+    echo "--- Generating CMake toolchain file for ${TARGET_TRIPLE} ---" >&2
     cat <<EOF > "$TOOLCHAIN_FILE"
 # CMake Toolchain File for ${TARGET_TRIPLE}
 
@@ -159,6 +160,7 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 EOF
 fi
+# This is the ONLY line that prints to standard output.
 echo "$TOOLCHAIN_FILE"
 EOT
 
