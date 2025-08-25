@@ -70,7 +70,7 @@ RUN find build/bin -type f -executable -exec cp -v {} /lld-install/bin/ \;
 RUN test -f /lld-install/bin/lli || (echo "Error: lli not installed!" && false)
 
 ########################################
-# Stage 3: Alpine Static Image with LLD
+# Stage 3: Alpine Static Image with LLD and a Robust Toolchain
 ########################################
 FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS alpine-static
 
@@ -108,44 +108,62 @@ RUN if xx-info is-cross; then cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/l
 # Patch LLVMConfig for proper sysroot awareness
 RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
 
-# Add xx-toolchain helper
-# CRITICAL CHANGES:
-# - Set CMAKE_C_COMPILER and CMAKE_CXX_COMPILER to use xx-clang directly.
-# - Add CMAKE_FIND_ROOT_PATH_MODE_* to ensure CMake only searches within the sysroot.
-# - Add CMAKE_*_COMPILER_FORCED to prevent problematic compiler probes.
+# CRITICAL CHANGE: Create a comprehensive, robust toolchain file generator
 RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
 #!/bin/bash
-mkdir -p /etc/xx-toolchains/
-TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-clang --print-target-triple).cmake"
-[ -f "$TOOLCHAIN_FILE" ] || cat <<EOF > "$TOOLCHAIN_FILE"
-set(CMAKE_CROSSCOMPILING ON)
-set(CMAKE_SYSROOT "$(xx-info sysroot)")
-set(CMAKE_SYSTEM_NAME "Linux")
-set(CMAKE_SYSTEM_VERSION 1)
-set(CMAKE_SYSTEM_PROCESSOR "$(xx-info march)")
+set -e
+SYSROOT=$(xx-info sysroot)
+TARGET_TRIPLE=$(xx-clang --print-target-triple)
+TOOLCHAIN_FILE="/etc/xx-toolchains/${TARGET_TRIPLE}.cmake"
+
+# Only generate the file if it doesn't exist
+if [ ! -f "$TOOLCHAIN_FILE" ]; then
+    mkdir -p "$(dirname "$TOOLCHAIN_FILE")"
+    echo "--- Generating CMake toolchain file for ${TARGET_TRIPLE} ---"
+    cat <<EOF > "$TOOLCHAIN_FILE"
+# CMake Toolchain File for ${TARGET_TRIPLE}
+
+# --- System Identification ---
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR "$(xx-info arch)")
+set(CMAKE_SYSROOT "${SYSROOT}")
+
+# --- Compilers and Toolchain Binaries ---
 set(CMAKE_C_COMPILER "$(which xx-clang)")
 set(CMAKE_CXX_COMPILER "$(which xx-clang++)")
 set(CMAKE_ASM_COMPILER "$(which xx-clang)")
-set(CMAKE_AR "$(which ar)")
-set(CMAKE_RANLIB "$(which ranlib)")
-set(PKG_CONFIG_EXECUTABLE "$(xx-clang --print-prog-name=pkg-config)")
-set(CMAKE_C_COMPILER_TARGET "$(xx-clang --print-target-triple)")
-set(CMAKE_CXX_COMPILER_TARGET "$(xx-clang --print-target-triple)")
-set(CMAKE_ASM_COMPILER_TARGET "$(xx-clang --print-target-triple)")
 
-# Crucial additions for robust cross-compilation with CMake
-set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM ONLY)
+# Explicitly set the linker, ar, and ranlib to the LLVM versions via xx wrappers
+set(CMAKE_LINKER "$(which xx-ld.lld)")
+set(CMAKE_AR "$(which xx-llvm-ar)")
+set(CMAKE_RANLIB "$(which xx-llvm-ranlib)")
+
+# --- Compiler and Linker Flags ---
+# This is the key: we define all flags here to ensure they are used
+# consistently, even during CMake's internal try_compile checks.
+set(CXX_FLAGS "-stdlib=libc++ -isystem ${SYSROOT}/usr/include -isystem ${SYSROOT}/usr/include/c++/v1 -pthread")
+set(C_FLAGS "-isystem ${SYSROOT}/usr/include -pthread")
+set(LINKER_FLAGS "-stdlib=libc++ -fuse-ld=lld")
+
+set(CMAKE_CXX_FLAGS "\${CXX_FLAGS}" CACHE STRING "C++ compiler flags")
+set(CMAKE_C_FLAGS "\${C_FLAGS}" CACHE STRING "C compiler flags")
+set(CMAKE_EXE_LINKER_FLAGS "\${LINKER_FLAGS}" CACHE STRING "Executable linker flags")
+set(CMAKE_SHARED_LINKER_FLAGS "\${LINKER_FLAGS}" CACHE STRING "Shared linker flags")
+set(CMAKE_MODULE_LINKER_FLAGS "\${LINKER_FLAGS}" CACHE STRING "Module linker flags")
+
+# --- Search Behavior ---
+# Force CMake to search for libraries/headers only in the sysroot.
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
-set(CMAKE_C_COMPILER_FORCED TRUE)
-set(CMAKE_CXX_COMPILER_FORCED TRUE)
 EOF
+fi
 echo "$TOOLCHAIN_FILE"
 EOT
 
 ########################################
-# Stage 4: wasmedge-build with a robust libc++ toolchain
+# Stage 4: wasmedge-build with the robust toolchain
 ########################################
 FROM alpine-static AS wasmedge-build
 
@@ -166,8 +184,7 @@ RUN apk add --no-cache \
     zstd-dev \
     zstd-static
 
-# CRITICAL CHANGE: Install clang and the libc++ toolchain into the sysroot.
-# This avoids the std::filesystem linking issues associated with using libstdc++.
+# Install the libc++ toolchain into the sysroot
 RUN xx-apk add musl-dev libc-dev clang g++ libc++-static libc++-dev
 
 # Fake dsymutil for CMake sanity
@@ -177,29 +194,15 @@ RUN ln -sf /bin/true /usr/bin/dsymutil
 RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not found in sysroot!" && false)
 RUN test -f "$(xx-info sysroot)/usr/include/c++/v1/vector" || (echo "libc++ headers not found in sysroot!" && false)
 
-# CRITICAL FIX 3.0: Use the -stdlib=libc++ flag to create a unified and
-# self-contained toolchain. This eliminates the need for manual linker flags.
+# CRITICAL FIX 4.0: Trust the toolchain.
+# We REMOVE all the manual CMAKE_*_FLAGS from the command line.
+# The robust toolchain file generated in the previous stage will handle everything.
 RUN --mount=type=bind,target=/src,source=. \
-    SYSROOT_PATH=$(xx-info sysroot) && \
-    \
-    # The flags now are much simpler. We just need to point to the C headers
-    # and the libc++ headers, and tell clang to use the libc++ library.
-    # We also add -pthread, which is often implicitly needed.
-    export CXX_FLAGS="-stdlib=libc++ -isystem ${SYSROOT_PATH}/usr/include -isystem ${SYSROOT_PATH}/usr/include/c++/v1 -pthread" && \
-    export C_FLAGS="-isystem ${SYSROOT_PATH}/usr/include -pthread" && \
-    export LINKER_FLAGS="-stdlib=libc++" && \
-    \
     cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX="/install" \
         -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
-        # Apply our new, simpler, libc++-based flags
-        -DCMAKE_C_FLAGS="${C_FLAGS}" \
-        -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
-        -DCMAKE_EXE_LINKER_FLAGS="${LINKER_FLAGS}" \
-        -DCMAKE_SHARED_LINKER_FLAGS="${LINKER_FLAGS}" \
-        -DCMAKE_MODULE_LINKER_FLAGS="${LINKER_FLAGS}" \
         -DCMAKE_PREFIX_PATH="$(xx-info sysroot)/usr/lib/cmake/llvm" \
         -DWASMEDGE_BUILD_PACKAGE="TGZ" \
         -DWASMEDGE_USE_LLVM=ON \
