@@ -145,7 +145,7 @@ echo "$TOOLCHAIN_FILE"
 EOT
 
 ########################################
-# Stage 4: wasmedge-build with sysroot
+# Stage 4: wasmedge-build with a robust libc++ toolchain
 ########################################
 FROM alpine-static AS wasmedge-build
 
@@ -166,45 +166,40 @@ RUN apk add --no-cache \
     zstd-dev \
     zstd-static
 
-# Standard headers and C++ libraries into sysroot
-RUN xx-apk add musl-dev libc-dev g++
+# CRITICAL CHANGE: Install clang and the libc++ toolchain into the sysroot.
+# This avoids the std::filesystem linking issues associated with using libstdc++.
+RUN xx-apk add musl-dev libc-dev clang g++ libc++-static libc++-dev
 
 # Fake dsymutil for CMake sanity
 RUN ln -sf /bin/true /usr/bin/dsymutil
 
 # Sanity checks
 RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not found in sysroot!" && false)
-RUN test -f "$(xx-info sysroot)/usr/include/c++/$(ls "$(xx-info sysroot)"/usr/include/c++/)/cstdlib" || (echo "C++ cstdlib header not found in sysroot!" && false)
+RUN test -f "$(xx-info sysroot)/usr/include/c++/v1/vector" || (echo "libc++ headers not found in sysroot!" && false)
 
-# CRITICAL FIX 2.0: Define C/CXX flags for headers AND Linker flags for libraries.
+# CRITICAL FIX 3.0: Use the -stdlib=libc++ flag to create a unified and
+# self-contained toolchain. This eliminates the need for manual linker flags.
 RUN --mount=type=bind,target=/src,source=. \
-    # --- Part 1: Discover paths within the sysroot ---
     SYSROOT_PATH=$(xx-info sysroot) && \
-    GCC_TRIPLE=$(xx-clang --print-target-triple) && \
-    CXX_VERSION_DIR=$(ls -d "${SYSROOT_PATH}"/usr/include/c++/* | head -n 1) && \
-    CXX_VERSION=$(basename "${CXX_VERSION_DIR}") && \
     \
-    # --- Part 2: Construct flags for the COMPILER ---
-    # This tells the compiler where to find headers like <vector>, <filesystem>, etc.
-    export COMPILE_FLAGS="-isystem ${SYSROOT_PATH}/usr/include \
-                          -isystem ${SYSROOT_PATH}/usr/include/c++/${CXX_VERSION} \
-                          -isystem ${SYSROOT_PATH}/usr/include/c++/${CXX_VERSION}/${GCC_TRIPLE}" && \
-    \
-    # --- Part 3: Construct flags for the LINKER ---
-    # This tells the linker where to find libraries (-L) and which ones to link (-l).
-    # This is the key to solving the std::filesystem issue.
-    export LINKER_FLAGS="-L${SYSROOT_PATH}/usr/lib/gcc/${GCC_TRIPLE}/${CXX_VERSION} -lstdc++fs" && \
+    # The flags now are much simpler. We just need to point to the C headers
+    # and the libc++ headers, and tell clang to use the libc++ library.
+    # We also add -pthread, which is often implicitly needed.
+    export CXX_FLAGS="-stdlib=libc++ -isystem ${SYSROOT_PATH}/usr/include -isystem ${SYSROOT_PATH}/usr/include/c++/v1 -pthread" && \
+    export C_FLAGS="-isystem ${SYSROOT_PATH}/usr/include -pthread" && \
+    export LINKER_FLAGS="-stdlib=libc++" && \
     \
     cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX="/install" \
         -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
-        # Apply our compiler flags
-        -DCMAKE_C_FLAGS="${COMPILE_FLAGS}" \
-        -DCMAKE_CXX_FLAGS="${COMPILE_FLAGS}" \
-        # Apply our new linker flags
+        # Apply our new, simpler, libc++-based flags
+        -DCMAKE_C_FLAGS="${C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
         -DCMAKE_EXE_LINKER_FLAGS="${LINKER_FLAGS}" \
+        -DCMAKE_SHARED_LINKER_FLAGS="${LINKER_FLAGS}" \
+        -DCMAKE_MODULE_LINKER_FLAGS="${LINKER_FLAGS}" \
         -DCMAKE_PREFIX_PATH="$(xx-info sysroot)/usr/lib/cmake/llvm" \
         -DWASMEDGE_BUILD_PACKAGE="TGZ" \
         -DWASMEDGE_USE_LLVM=ON \
