@@ -153,7 +153,7 @@ genWasmEdge_Result(const ErrCode &Code) noexcept {
 template <typename C>
 inline constexpr ::uint128_t to_uint128_t(C Val) noexcept {
 #if defined(__x86_64__) || defined(__aarch64__) ||                             \
-    (defined(__riscv) && __riscv_xlen == 64)
+    (defined(__riscv) && __riscv_xlen == 64) || defined(__s390x__)
   return Val;
 #else
   return {/* Low */ Val.low(), /* High */ static_cast<uint64_t>(Val.high())};
@@ -161,7 +161,7 @@ inline constexpr ::uint128_t to_uint128_t(C Val) noexcept {
 }
 template <typename C> inline constexpr ::int128_t to_int128_t(C Val) noexcept {
 #if defined(__x86_64__) || defined(__aarch64__) ||                             \
-    (defined(__riscv) && __riscv_xlen == 64)
+    (defined(__riscv) && __riscv_xlen == 64) || defined(__s390x__)
   return Val;
 #else
   return {/* Low */ Val.low(), /* High */ Val.high()};
@@ -173,7 +173,7 @@ template <typename C> inline constexpr ::int128_t to_int128_t(C Val) noexcept {
 template <typename C, typename T>
 inline constexpr C to_WasmEdge_128_t(T Val) noexcept {
 #if defined(__x86_64__) || defined(__aarch64__) ||                             \
-    (defined(__riscv) && __riscv_xlen == 64)
+    (defined(__riscv) && __riscv_xlen == 64) || defined(__s390x__)
   return Val;
 #else
   return C(Val.High, Val.Low);
@@ -2021,6 +2021,19 @@ WasmEdge_ModuleInstanceCreate(const WasmEdge_String ModuleName) {
 }
 
 WASMEDGE_CAPI_EXPORT WasmEdge_ModuleInstanceContext *
+WasmEdge_ModuleInstanceCreateWASIWithFds(
+    const char *const *Args, const uint32_t ArgLen, const char *const *Envs,
+    const uint32_t EnvLen, const char *const *Preopens,
+    const uint32_t PreopenLen, const int32_t StdInFd, const int32_t StdOutFd,
+    const int32_t StdErrFd) {
+  auto *WasiMod = new WasmEdge::Host::WasiModule();
+  WasmEdge_ModuleInstanceInitWASIWithFds(toModCxt(WasiMod), Args, ArgLen, Envs,
+                                         EnvLen, Preopens, PreopenLen, StdInFd,
+                                         StdOutFd, StdErrFd);
+  return toModCxt(WasiMod);
+}
+
+WASMEDGE_CAPI_EXPORT WasmEdge_ModuleInstanceContext *
 WasmEdge_ModuleInstanceCreateWASI(const char *const *Args,
                                   const uint32_t ArgLen,
                                   const char *const *Envs,
@@ -2074,6 +2087,47 @@ WASMEDGE_CAPI_EXPORT void WasmEdge_ModuleInstanceInitWASI(
   }
   auto &WasiEnv = WasiMod->getEnv();
   WasiEnv.init(DirVec, ProgName, ArgVec, EnvVec);
+}
+
+WASMEDGE_CAPI_EXPORT void WasmEdge_ModuleInstanceInitWASIWithFds(
+    WasmEdge_ModuleInstanceContext *Cxt, const char *const *Args,
+    const uint32_t ArgLen, const char *const *Envs, const uint32_t EnvLen,
+    const char *const *Preopens, const uint32_t PreopenLen,
+    const int32_t StdInFd, const int32_t StdOutFd, const int32_t StdErrFd) {
+  if (!Cxt) {
+    return;
+  }
+  auto *WasiMod = dynamic_cast<WasmEdge::Host::WasiModule *>(fromModCxt(Cxt));
+  if (!WasiMod) {
+    return;
+  }
+  std::vector<std::string> ArgVec, EnvVec, DirVec;
+  std::string ProgName;
+  if (Args) {
+    if (ArgLen > 0) {
+      ProgName = Args[0];
+    }
+    for (uint32_t I = 1; I < ArgLen; I++) {
+      ArgVec.emplace_back(Args[I]);
+    }
+  }
+  if (Envs) {
+    for (uint32_t I = 0; I < EnvLen; I++) {
+      EnvVec.emplace_back(Envs[I]);
+    }
+  }
+  if (Preopens) {
+    for (uint32_t I = 0; I < PreopenLen; I++) {
+      DirVec.emplace_back(Preopens[I]);
+    }
+  }
+  auto &WasiEnv = WasiMod->getEnv();
+  auto Result = WasiEnv.initWithFds(DirVec, ProgName, ArgVec, EnvVec, StdInFd,
+                                    StdOutFd, StdErrFd);
+  if (!Result) {
+    spdlog::error("    Failed to initialize WASI environment: {}"sv,
+                  Result.error());
+  }
 }
 
 WASMEDGE_CAPI_EXPORT extern uint32_t
@@ -3101,6 +3155,28 @@ WasmEdge_VMGetFunctionTypeRegistered(const WasmEdge_VMContext *Cxt,
 WASMEDGE_CAPI_EXPORT void WasmEdge_VMCleanup(WasmEdge_VMContext *Cxt) {
   if (Cxt) {
     Cxt->VM.cleanup();
+  }
+}
+
+void WasmEdge_VMForceDeleteRegisteredModule(const WasmEdge_VMContext *Cxt,
+                                            const WasmEdge_String ModuleName) {
+  if (!Cxt || !ModuleName.Buf) {
+    return; // Invalid input
+  }
+
+  // Cast away const to match WasmEdge_VMGetStoreContext signature
+  WasmEdge_StoreContext *StoreCxt =
+      WasmEdge_VMGetStoreContext(const_cast<WasmEdge_VMContext *>(Cxt));
+  if (!StoreCxt) {
+    return; // Invalid store context
+  }
+
+  const WasmEdge_ModuleInstanceContext *ModInst =
+      WasmEdge_StoreFindModule(StoreCxt, ModuleName);
+  if (ModInst) {
+    fromStoreCxt(StoreCxt)->unregisterModule(genStrView(ModuleName));
+    WasmEdge_ModuleInstanceDelete(
+        const_cast<WasmEdge_ModuleInstanceContext *>(ModInst));
   }
 }
 

@@ -6,6 +6,7 @@
 #include "common/defines.h"
 #include "common/errcode.h"
 #include "common/span.h"
+#include "common/types.h"
 #include "host/wasi/error.h"
 #include "host/wasi/vfs.h"
 #include <functional>
@@ -351,6 +352,8 @@ public:
   static INode stdOut() noexcept;
 
   static INode stdErr() noexcept;
+
+  static WasiExpect<INode> fromFd(int32_t Fd);
 
   /// Open a file or directory.
   ///

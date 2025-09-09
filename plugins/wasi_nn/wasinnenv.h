@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "wasinn_bitnet.h"
 #include "wasinn_chattts.h"
 #include "wasinn_ggml.h"
 #include "wasinn_mlx.h"
@@ -233,7 +234,7 @@ struct WasiNNEnvironment :
   bool mdGet(std::string Name, uint32_t &GraphId) noexcept {
     std::shared_lock Lock(MdMutex);
     if (auto It = MdMap.find(Name); It != MdMap.end()) {
-      GraphId = static_cast<uint32_t>(It->second);
+      GraphId = EndianValue(static_cast<uint32_t>(It->second)).le();
       return true;
     }
     return false;

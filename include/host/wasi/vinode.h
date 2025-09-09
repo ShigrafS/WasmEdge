@@ -4,6 +4,7 @@
 #pragma once
 
 #include "common/filesystem.h"
+#include "common/types.h"
 #include "host/wasi/error.h"
 #include "host/wasi/inode.h"
 #include "host/wasi/vfs.h"
@@ -52,6 +53,8 @@ public:
                                         __wasi_rights_t FRI);
   static std::shared_ptr<VINode> stdErr(__wasi_rights_t FRB,
                                         __wasi_rights_t FRI);
+  static WasiExpect<std::shared_ptr<VINode>>
+  fromFd(int32_t Fd, __wasi_rights_t FRB, __wasi_rights_t FRI);
 
   static std::string canonicalGuest(std::string_view Path);
 
@@ -114,8 +117,8 @@ public:
   /// @param[out] FdStat Result.
   /// @return Nothing or WASI error
   WasiExpect<void> fdFdstatGet(__wasi_fdstat_t &FdStat) const noexcept {
-    FdStat.fs_rights_base = FsRightsBase;
-    FdStat.fs_rights_inheriting = FsRightsInheriting;
+    FdStat.fs_rights_base = EndianValue(FsRightsBase).le();
+    FdStat.fs_rights_inheriting = EndianValue(FsRightsInheriting).le();
     return Node.fdFdstatGet(FdStat);
   }
 

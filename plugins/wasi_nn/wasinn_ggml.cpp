@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2019-2024 Second State INC
 
 #include "wasinn_ggml.h"
+#include "common/types.h"
 #include "wasinnenv.h"
 #include <cstdint>
 
@@ -141,6 +142,32 @@ ErrNo parseMetadata(Graph &GraphRef, LocalConfig &ConfRef,
                 "Unable to retrieve the n-gpu-layers option."sv)
     }
     GraphRef.Params.n_gpu_layers = static_cast<int32_t>(NGPULayers);
+  }
+  if (Doc.at_key("cpu-moe").error() == simdjson::SUCCESS) {
+    bool CpuMoe;
+    auto Err = Doc["cpu-moe"].get<bool>().get(CpuMoe);
+    if (Err) {
+      RET_ERROR(ErrNo::InvalidArgument,
+                "Unable to retrieve the cpu-moe option."sv)
+    }
+    if (CpuMoe) {
+      GraphRef.TensorBuftOverrides.push_back("\\.ffn_(up|down|gate)_exps");
+    }
+  }
+  if (Doc.at_key("n-cpu-moe").error() == simdjson::SUCCESS) {
+    int64_t NCpuMoe;
+    auto Err = Doc["n-cpu-moe"].get<int64_t>().get(NCpuMoe);
+    if (Err) {
+      RET_ERROR(ErrNo::InvalidArgument,
+                "Unable to retrieve the n-cpu-moe option."sv)
+    }
+    if (NCpuMoe < 0) {
+      RET_ERROR(ErrNo::InvalidArgument, "Invalid n-cpu-moe value."sv)
+    }
+    for (int I = 0; I < NCpuMoe; I++) {
+      GraphRef.TensorBuftOverrides.push_back(
+          string_format("blk\\.%d\\.ffn_(up|down|gate)_exps", I));
+    }
   }
   if (Doc.at_key("tensor-split").error() == simdjson::SUCCESS) {
     // The TensorSplit is a comma-separated list of non-negative values.
@@ -414,16 +441,6 @@ ErrNo parseMetadata(Graph &GraphRef, LocalConfig &ConfRef,
       return ErrNo::InvalidArgument;
     }
     GraphRef.Params.yarn_orig_ctx = static_cast<int32_t>(YarnOrigCtx);
-  }
-  if (Doc.at_key("defrag-thold").error() == simdjson::SUCCESS) {
-    double DefragThold;
-    auto Err = Doc["defrag-thold"].get<double>().get(DefragThold);
-    if (Err) {
-      spdlog::error(
-          "[WASI-NN] GGML backend: Unable to retrieve the defrag-thold option."sv);
-      return ErrNo::InvalidArgument;
-    }
-    GraphRef.Params.defrag_thold = static_cast<float>(DefragThold);
   }
   if (Doc.at_key("mask-valid").error() == simdjson::SUCCESS) {
     auto Err =
@@ -1259,10 +1276,21 @@ ErrNo parseMetadata(Graph &GraphRef, LocalConfig &ConfRef,
     }
   }
   if (Doc.at_key("flash-attn").error() == simdjson::SUCCESS) {
-    auto Err = Doc["flash-attn"].get<bool>().get(GraphRef.Params.flash_attn);
+    std::string_view FlashAttn;
+    auto Err = Doc["flash-attn"].get<std::string_view>().get(FlashAttn);
     if (Err) {
       RET_ERROR(ErrNo::InvalidArgument,
                 "Unable to retrieve the flash-attn option."sv)
+    }
+    if (FlashAttn == "on"sv || FlashAttn == "enabled"sv) {
+      GraphRef.Params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    } else if (FlashAttn == "off"sv || FlashAttn == "disabled"sv) {
+      GraphRef.Params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    } else if (FlashAttn == "auto"sv) {
+      GraphRef.Params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
+    } else {
+      RET_ERROR(ErrNo::InvalidArgument,
+                "The flash-attn option must be one of: on, off, auto."sv)
     }
   }
   if (Doc.at_key("no-perf").error() == simdjson::SUCCESS) {
@@ -1743,6 +1771,15 @@ ErrNo parseMetadata(Graph &GraphRef, LocalConfig &ConfRef,
       RET_ERROR(ErrNo::InvalidArgument,
                 "Unable to retrieve the batched-bench-output-jsonl option."sv)
     }
+  }
+
+  // The tensor buffer overrides should terminated with empty pattern.
+  if (!GraphRef.TensorBuftOverrides.empty()) {
+    for (const std::string &Override : GraphRef.TensorBuftOverrides) {
+      GraphRef.Params.tensor_buft_overrides.push_back(
+          {Override.c_str(), ggml_backend_cpu_buffer_type()});
+    }
+    GraphRef.Params.tensor_buft_overrides.push_back({nullptr, nullptr});
   }
 
   if (GraphRef.TextToSpeech) {
@@ -2610,13 +2647,14 @@ ErrNo codesToSpeech(Graph &GraphRef, Context &CxtRef) noexcept {
 Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
                    [[maybe_unused]] Device Device, uint32_t &GraphId) noexcept {
   // Add a new graph.
-  uint32_t GId = Env.newGraph(Backend::GGML);
-  auto &GraphRef = Env.NNGraph[GId].get<Graph>();
+  EndianValue<uint32_t> GId = Env.newGraph(Backend::GGML);
+  auto &GraphRef = Env.NNGraph[GId.raw()].get<Graph>();
 
   // Initialize the plugin parameters.
   GraphRef.EnableLog = false;
   GraphRef.EnableDebugLog = false;
-  const common_params CommonParamsDefault;
+  common_params CommonParamsDefault;
+  CommonParamsDefault.lr.init();
   GraphRef.Params = CommonParamsDefault;
   GraphRef.Params.n_keep = 0;
   GraphRef.Params.n_chunks = -1;
@@ -2630,34 +2668,6 @@ Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
   GraphRef.Params.n_gpu_layers = ModelParamsDefault.n_gpu_layers;
   GraphRef.Params.mmproj.path = ""sv;
   GraphRef.Params.warmup = false;
-  // Initialize the context parameters.
-  llama_context_params ContextParamsDefault = llama_context_default_params();
-  GraphRef.Params.cpuparams.n_threads = ContextParamsDefault.n_threads;
-  GraphRef.Params.n_ctx = ContextParamsDefault.n_ctx;
-  GraphRef.Params.n_batch = ContextParamsDefault.n_batch;
-  GraphRef.Params.n_ubatch = ContextParamsDefault.n_ubatch;
-  GraphRef.Params.cpuparams.n_threads = ContextParamsDefault.n_threads_batch;
-  GraphRef.Params.cpuparams_batch.n_threads =
-      ContextParamsDefault.n_threads_batch;
-  GraphRef.Params.rope_scaling_type = ContextParamsDefault.rope_scaling_type;
-  GraphRef.Params.pooling_type = ContextParamsDefault.pooling_type;
-  GraphRef.Params.attention_type = ContextParamsDefault.attention_type;
-  GraphRef.Params.rope_freq_base = ContextParamsDefault.rope_freq_base;
-  GraphRef.Params.rope_freq_scale = ContextParamsDefault.rope_freq_scale;
-  GraphRef.Params.yarn_ext_factor = ContextParamsDefault.yarn_ext_factor;
-  GraphRef.Params.yarn_attn_factor = ContextParamsDefault.yarn_attn_factor;
-  GraphRef.Params.yarn_beta_fast = ContextParamsDefault.yarn_beta_fast;
-  GraphRef.Params.yarn_beta_slow = ContextParamsDefault.yarn_beta_slow;
-  GraphRef.Params.yarn_orig_ctx = ContextParamsDefault.yarn_orig_ctx;
-  GraphRef.Params.defrag_thold = ContextParamsDefault.defrag_thold;
-  GraphRef.Params.cb_eval = ContextParamsDefault.cb_eval;
-  GraphRef.Params.cb_eval_user_data = ContextParamsDefault.cb_eval_user_data;
-  GraphRef.Params.cache_type_k = ContextParamsDefault.type_k;
-  GraphRef.Params.cache_type_v = ContextParamsDefault.type_v;
-  GraphRef.Params.embedding = ContextParamsDefault.embeddings;
-  GraphRef.Params.no_kv_offload = !ContextParamsDefault.offload_kqv;
-  GraphRef.Params.flash_attn = ContextParamsDefault.flash_attn;
-  GraphRef.Params.no_perf = ContextParamsDefault.no_perf;
 
   // Initialize the sampling parameters.
   const common_params_sampling SamplerParamsDefault;
@@ -2666,7 +2676,7 @@ Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
   GraphRef.Conf.StreamStdout = false;
   GraphRef.Conf.EmbdNormalize =
       static_cast<EmbdNormalizeType>(CommonParamsDefault.embd_normalize);
-  GraphRef.Conf.NPredict = ContextParamsDefault.n_ctx;
+  GraphRef.Conf.NPredict = GraphRef.Params.n_ctx;
   GraphRef.Conf.ReversePrompt = ""sv;
   GraphRef.Conf.ImagePath = ""sv;
 
@@ -2680,7 +2690,7 @@ Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
     // Ignore context or model updates when initializing the graph.
     auto Res = parseMetadata(GraphRef, GraphRef.Conf, Metadata);
     if (Res != ErrNo::Success) {
-      Env.deleteGraph(GId);
+      Env.deleteGraph(GId.raw());
       RET_ERROR(Res, "load: Failed to parse metadata."sv)
     }
   }
@@ -2707,7 +2717,7 @@ Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
     std::ofstream TempFile(GraphRef.Params.model.path,
                            std::ios::out | std::ios::binary);
     if (!TempFile) {
-      Env.deleteGraph(GId);
+      Env.deleteGraph(GId.raw());
       RET_ERROR(ErrNo::InvalidArgument,
                 "load: Failed to create the temporary file. Currently, our "sv
                 "workaround involves creating a temporary model file named "sv
@@ -2724,7 +2734,7 @@ Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
   // Check if the model exists.
   if (!std::filesystem::exists(
           std::filesystem::u8path(GraphRef.Params.model.path))) {
-    Env.deleteGraph(GId);
+    Env.deleteGraph(GId.raw());
     RET_ERROR(ErrNo::ModelNotFound, "load: model file not found."sv)
   }
   GraphRef.Params.model = GraphRef.Params.model;
@@ -2746,11 +2756,11 @@ Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
   GraphRef.LlamaModel = std::move(LlamaInit.model);
   GraphRef.LlamaContext = std::move(LlamaInit.context);
   if (GraphRef.LlamaModel == nullptr) {
-    Env.deleteGraph(GId);
+    Env.deleteGraph(GId.raw());
     RET_ERROR(ErrNo::InvalidArgument, "load: unable to init model."sv)
   }
   if (GraphRef.LlamaContext == nullptr) {
-    Env.deleteGraph(GId);
+    Env.deleteGraph(GId.raw());
     RET_ERROR(ErrNo::InvalidArgument, "load: unable to init context."sv)
   }
   LOG_DEBUG(GraphRef.EnableDebugLog,
@@ -2765,19 +2775,19 @@ Expect<ErrNo> load(WasiNNEnvironment &Env, Span<const Span<uint8_t>> Builders,
     GraphRef.TTSModel = std::move(TTSInit.model);
     GraphRef.TTSContext = std::move(TTSInit.context);
     if (GraphRef.TTSModel == nullptr) {
-      Env.deleteGraph(GId);
+      Env.deleteGraph(GId.raw());
       RET_ERROR(ErrNo::InvalidArgument, "load: unable to init TTS model."sv)
     }
     if (GraphRef.TTSContext == nullptr) {
-      Env.deleteGraph(GId);
+      Env.deleteGraph(GId.raw());
       RET_ERROR(ErrNo::InvalidArgument, "load: unable to init TTS context."sv)
     }
     LOG_DEBUG(GraphRef.EnableDebugLog, "load: initialize TTS model...Done"sv)
   }
 
   // Store the loaded graph.
-  GraphId = GId;
-  Env.NNGraph[GId].setReady();
+  GraphId = GId.le();
+  Env.NNGraph[GId.raw()].setReady();
 
   LOG_DEBUG(GraphRef.EnableDebugLog, "load...Done"sv)
   return ErrNo::Success;
@@ -2804,6 +2814,7 @@ Expect<ErrNo> initExecCtx(WasiNNEnvironment &Env, uint32_t GraphId,
       common_sampler_init(GraphRef.LlamaModel.get(), GraphRef.Params.sampling);
 
   Env.NNContext[ContextId].setReady();
+  ContextId = EndianValue(ContextId).le();
   LOG_DEBUG(GraphRef.EnableDebugLog, "initExecCtx...Done"sv)
   return ErrNo::Success;
 }
@@ -3103,7 +3114,8 @@ Expect<ErrNo> getOutput(WasiNNEnvironment &Env, uint32_t ContextId,
 
   std::copy_n(CxtRef.LlamaOutputs.data(), CxtRef.LlamaOutputs.size(),
               OutBuffer.data());
-  BytesWritten = static_cast<uint32_t>(CxtRef.LlamaOutputs.size());
+  BytesWritten =
+      EndianValue(static_cast<uint32_t>(CxtRef.LlamaOutputs.size())).le();
   LOG_DEBUG(GraphRef.EnableDebugLog, "getOutput: with Index {}...Done"sv, Index)
   return ErrNo::Success;
 }
@@ -3203,7 +3215,7 @@ Expect<ErrNo> getOutputSingle(WasiNNEnvironment &Env, uint32_t ContextId,
   std::string LastToken = common_token_to_piece(
       GraphRef.LlamaContext.get(), CxtRef.LlamaOutputTokens.back());
   std::copy_n(LastToken.data(), LastToken.length(), OutBuffer.data());
-  BytesWritten = static_cast<uint32_t>(LastToken.length());
+  BytesWritten = EndianValue(static_cast<uint32_t>(LastToken.length())).le();
   LOG_DEBUG(GraphRef.EnableDebugLog, "getOutputSingle: with Index {}...Done"sv,
             Index)
   return ErrNo::Success;
@@ -3323,6 +3335,11 @@ Expect<ErrNo> unload(WasiNNEnvironment &Env, uint32_t GraphId) noexcept {
     LOG_DEBUG(IsDebugLog, "unload: free TTS context"sv)
     GraphRef.TTSContext.reset();
     LOG_DEBUG(IsDebugLog, "unload: free TTS context...Done"sv)
+  }
+  if (!GraphRef.TensorBuftOverrides.empty()) {
+    LOG_DEBUG(IsDebugLog, "unload: free tensor buffer overrides"sv)
+    GraphRef.TensorBuftOverrides.clear();
+    LOG_DEBUG(IsDebugLog, "unload: free tensor buffer overrides...Done"sv)
   }
   Env.deleteGraph(GraphId);
   Env.mdRemoveById(GraphId);

@@ -103,8 +103,9 @@ WasiNNLoad::bodyImpl(const Runtime::CallingFrame &Frame, uint32_t BuilderPtr,
   Builders.reserve(BuilderLen);
   for (size_t I = 0; I < WasiBuilders.size(); ++I) {
     const auto &WasiBuilder = WasiBuilders[I];
-    auto Builder = MemInst->getSpan<uint8_t>(WasiBuilder.Ptr, WasiBuilder.Len);
-    if (unlikely(Builder.size() != WasiBuilder.Len)) {
+    auto Builder = MemInst->getSpan<uint8_t>(EndianValue(WasiBuilder.Ptr).le(),
+                                             EndianValue(WasiBuilder.Len).le());
+    if (unlikely(Builder.size() != EndianValue(WasiBuilder.Len).le())) {
       spdlog::error("[WASI-NN] Failed when accessing the Builder[{}] memory."sv,
                     I);
       return WASINN::ErrNo::InvalidArgument;
@@ -308,20 +309,24 @@ WasiNNSetInput::bodyImpl(const Runtime::CallingFrame &Frame, uint32_t ContextId,
   }
 
   WASINN::TensorData Tensor;
-  Tensor.Dimension = MemInst->getSpan<uint32_t>(WasiTensor->DimensionPtr,
-                                                WasiTensor->DimensionLen);
-  if (unlikely(Tensor.Dimension.size() != WasiTensor->DimensionLen)) {
+  Tensor.Dimension =
+      MemInst->getSpan<uint32_t>(EndianValue(WasiTensor->DimensionPtr).le(),
+                                 EndianValue(WasiTensor->DimensionLen).le());
+  if (unlikely(Tensor.Dimension.size() !=
+               EndianValue(WasiTensor->DimensionLen).le())) {
     spdlog::error("[WASI-NN] Failed when accessing the Dimension memory."sv);
     return WASINN::ErrNo::InvalidArgument;
   }
   Tensor.Tensor =
-      MemInst->getSpan<uint8_t>(WasiTensor->TensorPtr, WasiTensor->TensorLen);
-  if (unlikely(Tensor.Tensor.size() != WasiTensor->TensorLen)) {
+      MemInst->getSpan<uint8_t>(EndianValue(WasiTensor->TensorPtr).le(),
+                                EndianValue(WasiTensor->TensorLen).le());
+  if (unlikely(Tensor.Tensor.size() !=
+               EndianValue(WasiTensor->TensorLen).le())) {
     spdlog::error("[WASI-NN] Failed when accessing the TensorData memory."sv);
     return WASINN::ErrNo::InvalidArgument;
   }
-  switch (const auto RType =
-              static_cast<WASINN::TensorType>(WasiTensor->RType)) {
+  switch (const auto RType = static_cast<WASINN::TensorType>(
+              EndianValue(WasiTensor->RType).le())) {
   case WASINN::TensorType::F16:
   case WASINN::TensorType::F32:
   case WASINN::TensorType::U8:
@@ -499,9 +504,13 @@ Expect<WASINN::ErrNo> WasiNNGetOutputSingle::bodyImpl(
   case WASINN::Backend::GGML:
     return WASINN::GGML::getOutputSingle(Env, ContextId, Index, OutBuffer,
                                          *BytesWritten);
+  case WASINN::Backend::BitNet:
+    return WASINN::BitNet::getOutputSingle(Env, ContextId, Index, OutBuffer,
+                                           *BytesWritten);
   default:
-    spdlog::error("[WASI-NN] get_output_single: Only GGML backend supports "sv
-                  "get_output_single."sv);
+    spdlog::error(
+        "[WASI-NN] get_output_single: Only GGML and BitNet backend supports "sv
+        "get_output_single."sv);
     return WASINN::ErrNo::InvalidArgument;
   }
 }
@@ -601,9 +610,12 @@ WasiNNComputeSingle::bodyImpl(const Runtime::CallingFrame &Frame,
   switch (Env.NNContext[ContextId].getBackend()) {
   case WASINN::Backend::GGML:
     return WASINN::GGML::computeSingle(Env, ContextId);
+  case WASINN::Backend::BitNet:
+    return WASINN::BitNet::computeSingle(Env, ContextId);
   default:
-    spdlog::error("[WASI-NN] compute_single: Only GGML backend supports "sv
-                  "compute_single."sv);
+    spdlog::error(
+        "[WASI-NN] compute_single: Only GGML and BitNet backend supports "sv
+        "compute_single."sv);
     return WASINN::ErrNo::InvalidArgument;
   }
 }
@@ -642,9 +654,11 @@ WasiNNFiniSingle::bodyImpl(const Runtime::CallingFrame &Frame,
   switch (Env.NNContext[ContextId].getBackend()) {
   case WASINN::Backend::GGML:
     return WASINN::GGML::finiSingle(Env, ContextId);
+  case WASINN::Backend::BitNet:
+    return WASINN::BitNet::finiSingle(Env, ContextId);
   default:
     spdlog::error(
-        "[WASI-NN] fini_single: Only GGML backend supports fini_single."sv);
+        "[WASI-NN] fini_single: Only GGML and BitNet backend supports fini_single."sv);
     return WASINN::ErrNo::InvalidArgument;
   }
 }
@@ -675,8 +689,10 @@ Expect<WASINN::ErrNo> WasiNNUnload::bodyImpl(const Runtime::CallingFrame &Frame,
     return WASINN::Whisper::unload(Env, GraphId);
   case WASINN::Backend::ChatTTS:
     return WASINN::ChatTTS::unload(Env, GraphId);
+  case WASINN::Backend::BitNet:
+    return WASINN::BitNet::unload(Env, GraphId);
   default:
-    spdlog::error("[WASI-NN] unlaod: Only GGML, Whisper, and ChatTTS "sv
+    spdlog::error("[WASI-NN] unload: Only GGML, Whisper, ChatTTS and BitNet "sv
                   "backends support unload."sv);
     return WASINN::ErrNo::InvalidArgument;
   }
@@ -710,9 +726,12 @@ WasiNNFinalizeExecCtx::bodyImpl(const Runtime::CallingFrame &Frame,
     return WASINN::GGML::finalizeExecCtx(Env, ContextId);
   case WASINN::Backend::Whisper:
     return WASINN::Whisper::finalizeExecCtx(Env, ContextId);
+  case WASINN::Backend::BitNet:
+    return WASINN::BitNet::finalizeExecCtx(Env, ContextId);
   default:
-    spdlog::error("[WASI-NN] finalize_execution_context: Only GGML and "sv
-                  "Whisper backends support finalize_execution_context."sv);
+    spdlog::error(
+        "[WASI-NN] finalize_execution_context: Only GGML, BitNet and "sv
+        "Whisper backends support finalize_execution_context."sv);
     return WASINN::ErrNo::InvalidArgument;
   }
 }

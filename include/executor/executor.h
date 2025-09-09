@@ -14,13 +14,16 @@
 //===----------------------------------------------------------------------===//
 #pragma once
 
+#include "ast/component/component.h"
 #include "ast/module.h"
 #include "common/async.h"
 #include "common/configure.h"
 #include "common/defines.h"
 #include "common/errcode.h"
 #include "common/statistics.h"
+#include "common/types.h"
 #include "runtime/callingframe.h"
+#include "runtime/instance/component/component.h"
 #include "runtime/instance/module.h"
 #include "runtime/stackmgr.h"
 #include "runtime/storemgr.h"
@@ -146,14 +149,6 @@ public:
   Expect<std::unique_ptr<Runtime::Instance::ModuleInstance>>
   instantiateModule(Runtime::StoreManager &StoreMgr, const AST::Module &Mod);
 
-  Expect<std::unique_ptr<Runtime::Instance::ComponentInstance>>
-  instantiateComponent(Runtime::StoreManager &StoreMgr,
-                       const AST::Component::Component &Comp);
-  Expect<std::unique_ptr<Runtime::Instance::ComponentInstance>>
-  instantiateComponent(Runtime::StoreManager &StoreMgr,
-                       const AST::Component::Component &Comp,
-                       std::string_view Name);
-
   /// Instantiate and register a WASM module into a named module instance.
   Expect<std::unique_ptr<Runtime::Instance::ModuleInstance>>
   registerModule(Runtime::StoreManager &StoreMgr, const AST::Module &Mod,
@@ -162,6 +157,19 @@ public:
   /// Register an instantiated module into a named module instance.
   Expect<void> registerModule(Runtime::StoreManager &StoreMgr,
                               const Runtime::Instance::ModuleInstance &ModInst);
+
+  /// Instantiate a Component into an anonymous component instance.
+  Expect<std::unique_ptr<Runtime::Instance::ComponentInstance>>
+  instantiateComponent(Runtime::StoreManager &StoreMgr,
+                       const AST::Component::Component &Comp);
+
+  /// Instantiate and register a Component into a named component instance.
+  Expect<std::unique_ptr<Runtime::Instance::ComponentInstance>>
+  registerComponent(Runtime::StoreManager &StoreMgr,
+                    const AST::Component::Component &Comp,
+                    std::string_view Name);
+
+  /// Register an instantiated component into a named component instance.
   Expect<void>
   registerComponent(Runtime::StoreManager &StoreMgr,
                     const Runtime::Instance::ComponentInstance &CompInst);
@@ -276,34 +284,34 @@ private:
   instantiate(Runtime::StoreManager &StoreMgr,
               const AST::Component::Component &Comp,
               std::optional<std::string_view> Name = std::nullopt);
-
+  Expect<void>
+  instantiate(Runtime::StoreManager &StoreMgr,
+              Runtime::Instance::ComponentInstance &CompInst,
+              const AST::Component::CoreInstanceSection &CoreInstSec);
   Expect<void> instantiate(Runtime::StoreManager &StoreMgr,
                            Runtime::Instance::ComponentInstance &CompInst,
-                           const AST::Component::CoreInstanceSection &);
+                           const AST::Component::CoreTypeSection &CoreTypeSec);
   Expect<void> instantiate(Runtime::StoreManager &StoreMgr,
                            Runtime::Instance::ComponentInstance &CompInst,
-                           const AST::Component::CoreTypeSection &);
+                           const AST::Component::InstanceSection &InstSec);
   Expect<void> instantiate(Runtime::StoreManager &StoreMgr,
                            Runtime::Instance::ComponentInstance &CompInst,
-                           const AST::Component::InstanceSection &);
+                           const AST::Component::AliasSection &AliasSec);
   Expect<void> instantiate(Runtime::StoreManager &StoreMgr,
                            Runtime::Instance::ComponentInstance &CompInst,
-                           const AST::Component::AliasSection &);
+                           const AST::Component::TypeSection &TypeSec);
   Expect<void> instantiate(Runtime::StoreManager &StoreMgr,
                            Runtime::Instance::ComponentInstance &CompInst,
-                           const AST::Component::TypeSection &);
+                           const AST::Component::CanonSection &CanonSec);
   Expect<void> instantiate(Runtime::StoreManager &StoreMgr,
                            Runtime::Instance::ComponentInstance &CompInst,
-                           const AST::Component::CanonSection &);
+                           const AST::Component::StartSection &StartSec);
   Expect<void> instantiate(Runtime::StoreManager &StoreMgr,
                            Runtime::Instance::ComponentInstance &CompInst,
-                           const AST::Component::StartSection &);
+                           const AST::Component::ImportSection &ImportSec);
   Expect<void> instantiate(Runtime::StoreManager &StoreMgr,
                            Runtime::Instance::ComponentInstance &CompInst,
-                           const AST::Component::ImportSection &);
-  Expect<void> instantiate(Runtime::StoreManager &StoreMgr,
-                           Runtime::Instance::ComponentInstance &CompInst,
-                           const AST::Component::ExportSection &);
+                           const AST::Component::ExportSection &ExportSec);
   /// @}
 
   /// \name Helper Functions for canonical ABI
@@ -394,7 +402,7 @@ private:
   /// @{
   template <typename T>
   Expect<uint32_t> atomicWait(Runtime::Instance::MemoryInstance &MemInst,
-                              uint32_t Address, T Expected,
+                              uint32_t Address, EndianValue<T> Expected,
                               int64_t Timeout) noexcept;
   Expect<uint32_t> atomicNotify(Runtime::Instance::MemoryInstance &MemInst,
                                 uint32_t Address, uint32_t Count) noexcept;
