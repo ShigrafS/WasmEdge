@@ -131,22 +131,22 @@ set(CMAKE_C_COMPILER "$(which xx-clang)")
 set(CMAKE_CXX_COMPILER "$(which xx-clang++)")
 set(CMAKE_ASM_COMPILER "$(which xx-clang)")
 
-set(CMAKE_LINKER "$(which xx-ld.lld)")
+# Use the C++ compiler driver as the linker. This is the most robust approach.
+# It ensures all necessary libraries and paths are handled correctly.
+set(CMAKE_LINKER "$(which xx-clang++)")
 set(CMAKE_AR "$(which xx-llvm-ar)")
 set(CMAKE_RANLIB "$(which xx-llvm-ranlib)")
 
-# CRITICAL FIX: Force the sysroot directly in the CXX_FLAGS.
-# This overrides any incorrect behavior from CMake's initial test compile.
-# Also add the -L flag here, as CXX_FLAGS are more reliable than LINKER_FLAGS in the test.
-set(CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -isystem ${SYSROOT}/usr/include -isystem ${SYSROOT}/usr/include/c++/v1 -pthread -L${SYSROOT}/usr/lib")
-set(C_FLAGS "--sysroot=${SYSROOT} -isystem ${SYSROOT}/usr/include -pthread")
-set(LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L${SYSROOT}/usr/lib")
+# Compiler flags should not contain linker-specific options like -L or -l.
+set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -isystem ${SYSROOT}/usr/include -isystem ${SYSROOT}/usr/include/c++/v1 -pthread" CACHE STRING "C++ compiler flags")
+set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -isystem ${SYSROOT}/usr/include -pthread" CACHE STRING "C compiler flags")
 
-set(CMAKE_CXX_FLAGS "\${CXX_FLAGS}" CACHE STRING "C++ compiler flags")
-set(CMAKE_C_FLAGS "\${C_FLAGS}" CACHE STRING "C compiler flags")
-set(CMAKE_EXE_LINKER_FLAGS "\${LINKER_FLAGS}" CACHE STRING "Executable linker flags")
-set(CMAKE_SHARED_LINKER_FLAGS "\${LINKER_FLAGS}" CACHE STRING "Shared linker flags")
-set(CMAKE_MODULE_LINKER_FLAGS "\${LINKER_FLAGS}" CACHE STRING "Module linker flags")
+# Linker flags. Use a common string for all linker types.
+# Explicitly link libunwind and libc++fs as required by static libc++.
+set(COMMON_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L${SYSROOT}/usr/lib -lunwind -lc++fs")
+set(CMAKE_EXE_LINKER_FLAGS    "\${COMMON_LINKER_FLAGS}" CACHE STRING "Executable linker flags")
+set(CMAKE_SHARED_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Shared linker flags")
+set(CMAKE_MODULE_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Module linker flags")
 
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
@@ -179,8 +179,9 @@ RUN apk add --no-cache \
     zstd-dev \
     zstd-static
 
-# Install the libc++ toolchain into the sysroot
-RUN xx-apk add musl-dev libc-dev clang g++ libc++-static libc++-dev llvm-libunwind-static
+# Install a clean libc++ toolchain into the sysroot.
+# Do NOT install g++, as it brings in a conflicting libstdc++ implementation.
+RUN xx-apk add musl-dev libc-dev clang libc++-static libc++-dev llvm-libunwind-static
 
 # Fake dsymutil for CMake sanity
 RUN ln -sf /bin/true /usr/bin/dsymutil
