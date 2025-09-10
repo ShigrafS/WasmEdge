@@ -131,19 +131,17 @@ set(CMAKE_C_COMPILER "$(which xx-clang)")
 set(CMAKE_CXX_COMPILER "$(which xx-clang++)")
 set(CMAKE_ASM_COMPILER "$(which xx-clang)")
 
-# Use the C++ compiler driver as the linker. This is the most robust approach.
-# It ensures all necessary libraries and paths are handled correctly.
 set(CMAKE_LINKER "$(which xx-clang++)")
 set(CMAKE_AR "$(which xx-llvm-ar)")
 set(CMAKE_RANLIB "$(which xx-llvm-ranlib)")
 
-# Compiler flags should not contain linker-specific options like -L or -l.
 set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -isystem ${SYSROOT}/usr/include -isystem ${SYSROOT}/usr/include/c++/v1 -pthread" CACHE STRING "C++ compiler flags")
 set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -isystem ${SYSROOT}/usr/include -pthread" CACHE STRING "C compiler flags")
 
-# Linker flags. Use a common string for all linker types.
-# Explicitly link libunwind and libc++fs as required by static libc++.
-set(COMMON_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L${SYSROOT}/usr/lib -lunwind -lc++fs")
+# Linker flags.
+# Sledgehammer fix: Bypass the broken library search path by providing
+# absolute paths to the static libraries.
+set(COMMON_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld ${SYSROOT}/usr/lib/libunwind.a ${SYSROOT}/usr/lib/libc++fs.a")
 set(CMAKE_EXE_LINKER_FLAGS    "\${COMMON_LINKER_FLAGS}" CACHE STRING "Executable linker flags")
 set(CMAKE_SHARED_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Shared linker flags")
 set(CMAKE_MODULE_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Module linker flags")
