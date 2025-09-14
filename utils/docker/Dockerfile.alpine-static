@@ -8,8 +8,68 @@ ARG ALPINE_VERSION=3.22
 FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
 
 ########################################
-# Stage 2: Alpine Static Image with a Robust, Standard Toolchain
-# NOTE: The custom lld-builder stage has been removed for stability.
+# Stage 2: Build LLD from LLVM source
+########################################
+FROM alpine:${ALPINE_VERSION} AS lld-builder
+
+RUN apk add --no-cache \
+    bash \
+    cmake \
+    ninja \
+    clang \
+    llvm-dev \
+    llvm-static \
+    lld-dev \
+    git \
+    musl-dev \
+    zlib-dev \
+    zlib-static \
+    libc-dev \
+    libffi-dev \
+    curl \
+    tar \
+    xz \
+    zstd-dev \
+    zstd-static \
+    file \
+    python3
+
+WORKDIR /lld-build
+
+RUN git clone --depth=1 --branch=release/18.x https://github.com/llvm/llvm-project.git
+
+WORKDIR /lld-build/llvm-project
+
+RUN cmake -B build \
+    -G Ninja \
+    -DLLVM_ENABLE_PROJECTS="clang;llvm;lld" \
+    -DLLVM_TARGETS_TO_BUILD="X86;WebAssembly" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/lld-install \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DLLVM_ENABLE_ASSERTIONS=OFF \
+    -DLLVM_INCLUDE_TOOLS=ON \
+    -DLLVM_TOOL_LLVM_AR_BUILD=ON \
+    -DLLVM_TOOL_LLVM_NM_BUILD=ON \
+    -DLLVM_TOOL_LLVM_RANLIB_BUILD=ON \
+    -DLLVM_TOOL_LLVM_TBLGEN_BUILD=ON \
+    -DLLVM_TOOL_LLVM_PROFDATA_BUILD=ON \
+    -DLLVM_TOOL_LTO_BUILD=ON \
+    -DLLVM_TOOL_BUGPOINT_BUILD=ON \
+    -DLLVM_TOOL_LLVM_BCANALYZER_BUILD=ON \
+    -DLLVM_TOOL_LLI_BUILD=ON \
+    llvm
+
+RUN cmake --build build --target install
+
+# Copy all built tools, even if not installed via 'install' target
+RUN find build/bin -type f -executable -exec cp -v {} /lld-install/bin/ \;
+
+# Confirm lli is present
+RUN test -f /lld-install/bin/lli || (echo "Error: lli not installed!" && false)
+
+########################################
+# Stage 3: Alpine Static Image with LLD and a Robust Toolchain
 ########################################
 FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS alpine-static
 
@@ -18,16 +78,13 @@ RUN apk add --no-cache bash
 
 SHELL ["bash", "-c"]
 
-# Install all necessary build tools and the standard LLVM toolchain from Alpine's repository.
 RUN apk add --no-cache \
     cmake \
     samurai \
     g++ \
     clang \
-    llvm \
-    lld \
-    lld-dev \
     llvm-static \
+    lld-dev \
     zlib-static \
     zlib-dev \
     git \
@@ -35,14 +92,20 @@ RUN apk add --no-cache \
     libc-dev \
     libffi-dev
 
-RUN mkdir -p $(xx-info sysroot)/usr/bin
+RUN mkdir -p /usr/lib/llvm/lib /usr/lib/cmake/llvm $(xx-info sysroot)/usr/bin
 
-# If cross-compiling, copy the necessary tools into the sysroot for the toolchain to find.
-RUN if xx-info is-cross; then \
-      cp /usr/bin/ld.lld $(xx-info sysroot)/usr/bin/; \
-      cp /usr/bin/llvm-ar $(xx-info sysroot)/usr/bin/; \
-      cp /usr/bin/llvm-ranlib $(xx-info sysroot)/usr/bin/; \
-    fi
+COPY --from=lld-builder /lld-install/lib/ /usr/lib/
+COPY --from=lld-builder /lld-install/bin/ /usr/bin/
+COPY --from=lld-builder /lld-install/lib/cmake/ /usr/lib/cmake/
+
+RUN if xx-info is-cross; then cp -f /usr/bin/* $(xx-info sysroot)/usr/bin/; fi
+
+# Copy libLTO shared libraries
+COPY --from=lld-builder /lld-install/lib/libLTO.so* /usr/lib/
+RUN if xx-info is-cross; then cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/lib/; fi
+
+# Patch LLVMConfig for proper sysroot awareness
+RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
 
 # Create a comprehensive, robust toolchain file generator
 RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
@@ -70,16 +133,14 @@ set(CMAKE_ASM_COMPILER "$(which xx-clang)")
 # Use the C++ compiler driver as the linker. This is the most robust approach.
 set(CMAKE_LINKER "$(which xx-clang++)")
 set(CMAKE_AR "$(which xx-llvm-ar)")
-set(CMAKE_RANLIB "$(which xx-llvm-ranlib)")
+set(CMAKE_RANLIB "$(which xx--llvm-ranlib)")
 
-# Rely on the --sysroot flag to correctly handle standard include/library paths.
-# Manually adding paths like -L\${SYSROOT}/usr/lib can be problematic.
-set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -pthread" CACHE STRING "C++ compiler flags")
-set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -pthread" CACHE STRING "C compiler flags")
+# Be explicit with all paths to overcome toolchain path resolution issues.
+set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -isystem ${SYSROOT}/usr/include -isystem ${SYSROOT}/usr/include/c++/v1 -pthread" CACHE STRING "C++ compiler flags")
+set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -isystem ${SYSROOT}/usr/include -pthread" CACHE STRING "C compiler flags")
 
-# Linker flags. Explicitly link libunwind and libc++fs as required by static libc++.
-# The compiler driver, respecting --sysroot, should find them in \${SYSROOT}/usr/lib.
-set(COMMON_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld -lunwind -lc++fs")
+# Linker flags. Be explicit with the library path and required static libraries.
+set(COMMON_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L${SYSROOT}/usr/lib -lunwind -lc++fs")
 set(CMAKE_EXE_LINKER_FLAGS    "\${COMMON_LINKER_FLAGS}" CACHE STRING "Executable linker flags")
 set(CMAKE_SHARED_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Shared linker flags")
 set(CMAKE_MODULE_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Module linker flags")
@@ -94,7 +155,7 @@ echo "$TOOLCHAIN_FILE"
 EOT
 
 ########################################
-# Stage 3: wasmedge-build with the robust toolchain
+# Stage 4: wasmedge-build with the robust toolchain
 ########################################
 FROM alpine-static AS wasmedge-build
 
@@ -104,14 +165,16 @@ ARG ALPINE_VERSION
 WORKDIR /src
 SHELL ["bash", "-c"]
 
-# Install only host tools needed for the build.
+# Host tools
 RUN apk add --no-cache \
     curl \
     tar \
     git \
     ninja \
     bash \
-    cmake
+    cmake \
+    zstd-dev \
+    zstd-static
 
 # Install a clean libc++ toolchain into the sysroot.
 # Do NOT install g++, as it brings in a conflicting libstdc++ implementation.
@@ -123,6 +186,9 @@ RUN ln -sf /bin/true /usr/bin/dsymutil
 # Sanity checks
 RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not found in sysroot!" && false)
 RUN test -f "$(xx-info sysroot)/usr/include/c++/v1/vector" || (echo "libc++ headers not found in sysroot!" && false)
+
+# DIAGNOSTIC STEP: List the contents of the sysroot's library directory to verify files exist.
+RUN echo "--- Listing sysroot library contents ---" && ls -lA "$(xx-info sysroot)/usr/lib"
 
 # Trust the toolchain.
 RUN --mount=type=bind,target=/src,source=. \
