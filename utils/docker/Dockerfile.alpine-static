@@ -178,7 +178,15 @@ RUN apk add --no-cache \
 
 # Install a clean libc++ toolchain into the sysroot.
 # Do NOT install g++, as it brings in a conflicting libstdc++ implementation.
-RUN xx-apk add musl-dev libc-dev clang libc++-static libc++-dev llvm-libunwind-static
+# FIX: Added libc++fs-static to provide the library for the -lc++fs linker flag.
+RUN xx-apk add \
+    musl-dev \
+    libc-dev \
+    clang \
+    libc++-static \
+    libc++-dev \
+    llvm-libunwind-static \
+    libc++fs-static
 
 # Fake dsymutil for CMake sanity
 RUN ln -sf /bin/true /usr/bin/dsymutil
