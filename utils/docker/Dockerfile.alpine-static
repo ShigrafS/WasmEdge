@@ -140,7 +140,8 @@ set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -isystem ${SYSROOT}/usr
 set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -isystem ${SYSROOT}/usr/include -pthread" CACHE STRING "C compiler flags")
 
 # Linker flags. Be explicit with the library path and required static libraries.
-set(COMMON_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L${SYSROOT}/usr/lib -lunwind -lc++fs")
+# FIX: Removed -lc++fs as it's integrated into libc++ in this version.
+set(COMMON_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L${SYSROOT}/usr/lib -lunwind")
 set(CMAKE_EXE_LINKER_FLAGS    "\${COMMON_LINKER_FLAGS}" CACHE STRING "Executable linker flags")
 set(CMAKE_SHARED_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Shared linker flags")
 set(CMAKE_MODULE_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Module linker flags")
@@ -178,15 +179,14 @@ RUN apk add --no-cache \
 
 # Install a clean libc++ toolchain into the sysroot.
 # Do NOT install g++, as it brings in a conflicting libstdc++ implementation.
-# FIX: Added libc++fs-static to provide the library for the -lc++fs linker flag.
+# FIX: Reverted to the original package list, as libc++fs-static does not exist.
 RUN xx-apk add \
     musl-dev \
     libc-dev \
     clang \
     libc++-static \
     libc++-dev \
-    llvm-libunwind-static \
-    libc++fs-static
+    llvm-libunwind-static
 
 # Fake dsymutil for CMake sanity
 RUN ln -sf /bin/true /usr/bin/dsymutil
@@ -199,7 +199,7 @@ RUN test -f "$(xx-info sysroot)/usr/include/c++/v1/vector" || (echo "libc++ head
 RUN --mount=type=bind,target=/src,source=. \
     cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
-        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DCMAKE_POSITION_ININDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX="/install" \
         -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
         -DCMAKE_PREFIX_PATH="$(xx-info sysroot)/usr/lib/cmake/llvm" \
