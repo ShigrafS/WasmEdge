@@ -140,8 +140,8 @@ set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -isystem ${SYSROOT}/usr
 set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -isystem ${SYSROOT}/usr/include -pthread" CACHE STRING "C compiler flags")
 
 # Linker flags. Be explicit with the library path and required static libraries.
-# FIX: Added -lc++abi, a required dependency for std::filesystem and other C++ runtime features.
-set(COMMON_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L${SYSROOT}/usr/lib -lunwind -lc++abi")
+# FIX: Added the '-static' flag, which is crucial for building a fully static executable.
+set(COMMON_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L${SYSROOT}/usr/lib -lunwind -static")
 set(CMAKE_EXE_LINKER_FLAGS    "\${COMMON_LINKER_FLAGS}" CACHE STRING "Executable linker flags")
 set(CMAKE_SHARED_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Shared linker flags")
 set(CMAKE_MODULE_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Module linker flags")
@@ -179,15 +179,14 @@ RUN apk add --no-cache \
 
 # Install a clean libc++ toolchain into the sysroot.
 # Do NOT install g++, as it brings in a conflicting libstdc++ implementation.
-# FIX: Added libc++abi-static to provide the C++ ABI library.
+# FIX: Reverted to the correct package list, removing non-existent packages.
 RUN xx-apk add \
     musl-dev \
     libc-dev \
     clang \
     libc++-static \
     libc++-dev \
-    llvm-libunwind-static \
-    libc++abi-static
+    llvm-libunwind-static
 
 # Fake dsymutil for CMake sanity
 RUN ln -sf /bin/true /usr/bin/dsymutil
