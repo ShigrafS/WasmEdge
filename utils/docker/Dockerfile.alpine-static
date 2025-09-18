@@ -135,13 +135,16 @@ set(CMAKE_LINKER "$(which xx-clang++)")
 set(CMAKE_AR "$(which xx-llvm-ar)")
 set(CMAKE_RANLIB "$(which xx-llvm-ranlib)")
 
-# Be explicit with all paths to overcome toolchain path resolution issues.
-set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -isystem ${SYSROOT}/usr/include -isystem ${SYSROOT}/usr/include/c++/v1 -pthread" CACHE STRING "C++ compiler flags")
-set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -isystem ${SYSROOT}/usr/include -pthread" CACHE STRING "C compiler flags")
+set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -pthread" CACHE STRING "C++ compiler flags")
+set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -pthread" CACHE STRING "C compiler flags")
 
-# Linker flags. Be explicit with the library path and required static libraries.
-# FIX: Added the '-static' flag, which is crucial for building a fully static executable.
-set(COMMON_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L${SYSROOT}/usr/lib -lunwind -static")
+# FIX: Forcefully add include paths for all targets, including test compiles,
+# to solve the "filesystem header not found" issue.
+include_directories(SYSTEM "\${CMAKE_SYSROOT}/usr/include")
+include_directories(SYSTEM "\${CMAKE_SYSROOT}/usr/include/c++/v1")
+
+# Linker flags.
+set(COMMON_LINKER_FLAGS "--sysroot=\${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L\${SYSROOT}/usr/lib -lunwind")
 set(CMAKE_EXE_LINKER_FLAGS    "\${COMMON_LINKER_FLAGS}" CACHE STRING "Executable linker flags")
 set(CMAKE_SHARED_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Shared linker flags")
 set(CMAKE_MODULE_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Module linker flags")
@@ -179,7 +182,6 @@ RUN apk add --no-cache \
 
 # Install a clean libc++ toolchain into the sysroot.
 # Do NOT install g++, as it brings in a conflicting libstdc++ implementation.
-# FIX: Reverted to the correct package list, removing non-existent packages.
 RUN xx-apk add \
     musl-dev \
     libc-dev \
