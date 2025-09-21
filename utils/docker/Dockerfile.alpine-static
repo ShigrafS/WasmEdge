@@ -133,7 +133,7 @@ set(CMAKE_ASM_COMPILER "$(which xx-clang)")
 # Use the C++ compiler driver as the linker. This is the most robust approach.
 set(CMAKE_LINKER "$(which xx-clang++)")
 set(CMAKE_AR "$(which xx-llvm-ar)")
-set(CMAKE_RANLIB "$(which xx-llvm-ranlib)")
+set(CMAKE_RANLIB "$(which xx--llvm-ranlib)")
 
 # FIX: Add _GNU_SOURCE to expose non-standard Linux features in musl libc.
 # Also explicitly add sysroot include paths for CMake's 'try_compile' checks.
@@ -163,7 +163,7 @@ FROM alpine-static AS wasmedge-build
 ARG TARGETPLATFORM
 ARG ALPINE_VERSION
 
-WORKDIR /src
+WORKDIR /src_writable
 SHELL ["bash", "-c"]
 
 # Host tools
@@ -194,14 +194,15 @@ RUN ln -sf /bin/true /usr/bin/dsymutil
 RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not found in sysroot!" && false)
 RUN test -f "$(xx-info sysroot)/usr/include/c++/v1/vector" || (echo "libc++ headers not found in sysroot!" && false)
 
-# FINAL FIX: Patch the source code to define O_SYMLINK, then configure and build in a single step.
-# This is necessary because the musl version in Alpine 3.22 does not provide this definition.
-RUN --mount=type=bind,target=/src,source=. \
+# FINAL FIX: Copy the read-only mounted source to a writable location, then patch and build from there.
+RUN --mount=type=bind,target=/src,source=.,ro \
     set -e && \
+    echo "Creating a writable copy of the source code..." && \
+    cp -r /src/. . && \
     echo "Patching for older Alpine compatibility..." && \
-    sed -i '1i#include <fcntl.h>\n#ifndef O_SYMLINK\n#define O_SYMLINK O_NOFOLLOW\n#endif' /src/lib/host/wasi/inode-linux.cpp && \
+    sed -i '1i#include <fcntl.h>\n#ifndef O_SYMLINK\n#define O_SYMLINK O_NOFOLLOW\n#endif' lib/host/wasi/inode-linux.cpp && \
     echo "Configuring with CMake..." && \
-    cmake -S /src -B /build -G Ninja \
+    cmake -S . -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX="/install" \
@@ -221,5 +222,4 @@ RUN --mount=type=bind,target=/src,source=. \
     echo "Building with CMake..." && \
     cmake --build /build -- install package
 
-WORKDIR /src
 CMD ["/bin/bash"]
