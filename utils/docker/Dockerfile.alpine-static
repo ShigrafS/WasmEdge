@@ -135,10 +135,10 @@ set(CMAKE_LINKER "$(which xx-clang++)")
 set(CMAKE_AR "$(which xx-llvm-ar)")
 set(CMAKE_RANLIB "$(which xx-llvm-ranlib)")
 
-# FIX: Explicitly add sysroot include paths to compiler flags to ensure
-# that CMake's 'try_compile' checks can find standard library headers.
-set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -pthread -isystem \${SYSROOT}/usr/include/c++/v1 -isystem \${SYSROOT}/usr/include" CACHE STRING "C++ compiler flags")
-set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -pthread -isystem \${SYSROOT}/usr/include" CACHE STRING "C compiler flags")
+# FIX: Add _GNU_SOURCE to expose non-standard Linux features in musl libc.
+# Also explicitly add sysroot include paths for CMake's 'try_compile' checks.
+set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -pthread -D_GNU_SOURCE -isystem \${SYSROOT}/usr/include/c++/v1 -isystem \${SYSROOT}/usr/include" CACHE STRING "C++ compiler flags")
+set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -pthread -D_GNU_SOURCE -isystem \${SYSROOT}/usr/include" CACHE STRING "C compiler flags")
 
 # Linker flags.
 set(COMMON_LINKER_FLAGS "--sysroot=\${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L\${SYSROOT}/usr/lib -lunwind")
