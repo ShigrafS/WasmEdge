@@ -194,8 +194,13 @@ RUN ln -sf /bin/true /usr/bin/dsymutil
 RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not found in sysroot!" && false)
 RUN test -f "$(xx-info sysroot)/usr/include/c++/v1/vector" || (echo "libc++ headers not found in sysroot!" && false)
 
-# Trust the toolchain.
+# FINAL FIX: Patch the source code to define O_SYMLINK, then configure and build in a single step.
+# This is necessary because the musl version in Alpine 3.22 does not provide this definition.
 RUN --mount=type=bind,target=/src,source=. \
+    set -e && \
+    echo "Patching for older Alpine compatibility..." && \
+    sed -i '1i#include <fcntl.h>\n#ifndef O_SYMLINK\n#define O_SYMLINK O_NOFOLLOW\n#endif' /src/lib/host/wasi/inode-linux.cpp && \
+    echo "Configuring with CMake..." && \
     cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
@@ -212,10 +217,8 @@ RUN --mount=type=bind,target=/src,source=. \
         -DWASMEDGE_BUILD_EXAMPLE=OFF \
         -DWASMEDGE_LINK_LLVM_STATIC=ON \
         -DWASMEDGE_LINK_TOOLS_STATIC=ON \
-        -DWASMEDGE_DISABLE_LIBTINFO=ON
-
-# Build and install
-RUN --mount=type=bind,target=/src,source=. \
+        -DWASMEDGE_DISABLE_LIBTINFO=ON && \
+    echo "Building with CMake..." && \
     cmake --build /build -- install package
 
 WORKDIR /src
