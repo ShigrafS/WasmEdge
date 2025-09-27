@@ -58,7 +58,6 @@ RUN cmake -B build \
     -DLLVM_TOOL_BUGPOINT_BUILD=ON \
     -DLLVM_TOOL_LLVM_BCANALYZER_BUILD=ON \
     -DLLVM_TOOL_LLI_BUILD=ON \
-    -DLLVM_TOOL_LLI_BUILD=ON \
     llvm
 
 RUN cmake --build build --target install
@@ -79,10 +78,10 @@ RUN apk add --no-cache bash
 
 SHELL ["bash", "-c"]
 
+# CRITICAL FIX: Do not install g++, as it creates a standard library conflict.
 RUN apk add --no-cache \
     cmake \
     samurai \
-    g++ \
     clang \
     llvm-static \
     lld-dev \
@@ -131,17 +130,18 @@ set(CMAKE_C_COMPILER "$(which xx-clang)")
 set(CMAKE_CXX_COMPILER "$(which xx-clang++)")
 set(CMAKE_ASM_COMPILER "$(which xx-clang)")
 
+# Use the C++ compiler driver as the linker. This is the most robust approach.
 set(CMAKE_LINKER "$(which xx-clang++)")
 set(CMAKE_AR "$(which xx-llvm-ar)")
 set(CMAKE_RANLIB "$(which xx-llvm-ranlib)")
 
-set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -isystem ${SYSROOT}/usr/include -isystem ${SYSROOT}/usr/include/c++/v1 -pthread" CACHE STRING "C++ compiler flags")
-set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -isystem ${SYSROOT}/usr/include -pthread" CACHE STRING "C compiler flags")
+# FINAL FIX: Use -I for the C++ headers to give them higher priority in the search path,
+# preventing conflicts with the system's C headers.
+set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -pthread -D_GNU_SOURCE -I\${SYSROOT}/usr/include/c++/v1 -isystem \${SYSROOT}/usr/include" CACHE STRING "C++ compiler flags")
+set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -pthread -D_GNU_SOURCE -isystem \${SYSROOT}/usr/include" CACHE STRING "C compiler flags")
 
 # Linker flags.
-# Sledgehammer fix: Bypass the broken library search path by providing
-# absolute paths to the static libraries.
-set(COMMON_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld ${SYSROOT}/usr/lib/libunwind.a ${SYSROOT}/usr/lib/libc++fs.a")
+set(COMMON_LINKER_FLAGS "--sysroot=\${SYSROOT} -stdlib=libc++ -fuse-ld=lld -L\${SYSROOT}/usr/lib -lunwind")
 set(CMAKE_EXE_LINKER_FLAGS    "\${COMMON_LINKER_FLAGS}" CACHE STRING "Executable linker flags")
 set(CMAKE_SHARED_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Shared linker flags")
 set(CMAKE_MODULE_LINKER_FLAGS "\${COMMON_LINKER_FLAGS}" CACHE STRING "Module linker flags")
@@ -163,7 +163,7 @@ FROM alpine-static AS wasmedge-build
 ARG TARGETPLATFORM
 ARG ALPINE_VERSION
 
-WORKDIR /src
+WORKDIR /src_writable
 SHELL ["bash", "-c"]
 
 # Host tools
@@ -179,7 +179,13 @@ RUN apk add --no-cache \
 
 # Install a clean libc++ toolchain into the sysroot.
 # Do NOT install g++, as it brings in a conflicting libstdc++ implementation.
-RUN xx-apk add musl-dev libc-dev clang libc++-static libc++-dev llvm-libunwind-static
+RUN xx-apk add \
+    musl-dev \
+    libc-dev \
+    clang \
+    libc++-static \
+    libc++-dev \
+    llvm-libunwind-static
 
 # Fake dsymutil for CMake sanity
 RUN ln -sf /bin/true /usr/bin/dsymutil
@@ -188,9 +194,15 @@ RUN ln -sf /bin/true /usr/bin/dsymutil
 RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not found in sysroot!" && false)
 RUN test -f "$(xx-info sysroot)/usr/include/c++/v1/vector" || (echo "libc++ headers not found in sysroot!" && false)
 
-# Trust the toolchain.
-RUN --mount=type=bind,target=/src,source=. \
-    cmake -S /src -B /build -G Ninja \
+# Copy the read-only mounted source to a writable location, then patch and build from there.
+RUN --mount=type=bind,target=/src,source=.,ro \
+    set -e && \
+    echo "Creating a writable copy of the source code..." && \
+    cp -r /src/. . && \
+    echo "Patching for older Alpine compatibility..." && \
+    sed -i '1i#include <fcntl.h>\n#ifndef O_SYMLINK\n#define O_SYMLINK O_NOFOLLOW\n#endif' lib/host/wasi/inode-linux.cpp && \
+    echo "Configuring with CMake..." && \
+    cmake -S . -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX="/install" \
@@ -206,11 +218,8 @@ RUN --mount=type=bind,target=/src,source=. \
         -DWASMEDGE_BUILD_EXAMPLE=OFF \
         -DWASMEDGE_LINK_LLVM_STATIC=ON \
         -DWASMEDGE_LINK_TOOLS_STATIC=ON \
-        -DWASMEDGE_DISABLE_LIBTINFO=ON
-
-# Build and install
-RUN --mount=type=bind,target=/src,source=. \
+        -DWASMEDGE_DISABLE_LIBTINFO=ON && \
+    echo "Building with CMake..." && \
     cmake --build /build -- install package
 
-WORKDIR /src
 CMD ["/bin/bash"]
