@@ -133,11 +133,11 @@ set(CMAKE_ASM_COMPILER "$(which xx-clang)")
 # Use the C++ compiler driver as the linker. This is the most robust approach.
 set(CMAKE_LINKER "$(which xx-clang++)")
 set(CMAKE_AR "$(which xx-llvm-ar)")
+# FINAL FIX: Correct the typo from xx--llvm-ranlib to xx-llvm-ranlib
 set(CMAKE_RANLIB "$(which xx-llvm-ranlib)")
 
-# FINAL FIX: Use -I for the C++ headers to give them higher priority in the search path,
-# preventing conflicts with the system's C headers.
-set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -pthread -D_GNU_SOURCE -I\${SYSROOT}/usr/include/c++/v1 -isystem \${SYSROOT}/usr/include" CACHE STRING "C++ compiler flags")
+# A clean toolchain setup. Clang will find the correct headers with the right sysroot and stdlib flags.
+set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -pthread -D_GNU_SOURCE -isystem \${SYSROOT}/usr/include/c++/v1 -isystem \${SYSROOT}/usr/include" CACHE STRING "C++ compiler flags")
 set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -pthread -D_GNU_SOURCE -isystem \${SYSROOT}/usr/include" CACHE STRING "C compiler flags")
 
 # Linker flags.
