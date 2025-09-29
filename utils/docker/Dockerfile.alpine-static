@@ -3,231 +3,90 @@
 ARG ALPINE_VERSION=3.22
 
 ########################################
-# Stage 1: xx (cross-compilation tool)
+# Stage 1: Cross-compilation tool
 ########################################
 FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
 
 ########################################
-# Stage 2: Build LLD from LLVM source
+# Stage 2: Build ONLY LLD from LLVM source
+# This is much faster and avoids building an incomplete Clang.
 ########################################
 FROM alpine:${ALPINE_VERSION} AS lld-builder
 
-RUN apk add --no-cache \
-    bash \
-    cmake \
-    ninja \
-    clang \
-    llvm-dev \
-    llvm-static \
-    lld-dev \
-    git \
-    musl-dev \
-    zlib-dev \
-    zlib-static \
-    libc-dev \
-    libffi-dev \
-    curl \
-    tar \
-    xz \
-    zstd-dev \
-    zstd-static \
-    file \
-    python3
+RUN apk add --no-cache bash cmake ninja clang llvm-dev git
 
 WORKDIR /lld-build
-
 RUN git clone --depth=1 --branch=release/18.x https://github.com/llvm/llvm-project.git
 
-WORKDIR /lld-build/llvm-project
-
-# 🟢 ADDED: LLVM_TOOL_LLVM_AS_BUILD=ON
+WORKDIR /lld-build/llvm-project/llvm
 RUN cmake -B build \
     -G Ninja \
-    -DLLVM_ENABLE_PROJECTS="clang;llvm;lld" \
-    -DLLVM_TARGETS_TO_BUILD="X86;WebAssembly" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/lld-install \
-    -DCMAKE_INSTALL_LIBDIR=lib \
-    -DLLVM_ENABLE_ASSERTIONS=OFF \
-    -DLLVM_INCLUDE_TOOLS=ON \
-    -DLLVM_TOOL_LLVM_AR_BUILD=ON \
-    -DLLVM_TOOL_LLVM_NM_BUILD=ON \
-    -DLLVM_TOOL_LLVM_RANLIB_BUILD=ON \
-    -DLLVM_TOOL_LLVM_TBLGEN_BUILD=ON \
-    -DLLVM_TOOL_LLVM_PROFDATA_BUILD=ON \
-    -DLLVM_TOOL_LTO_BUILD=ON \
-    -DLLVM_TOOL_BUGPOINT_BUILD=ON \
-    -DLLVM_TOOL_LLI_BUILD=ON \
-    -DLLVM_TOOL_LLVM_BCANALYZER_BUILD=ON \
-    -DLLVM_TOOL_LLVM_AS_BUILD=ON \
-    llvm
+    -DLLVM_ENABLE_PROJECTS="lld"
 
 RUN cmake --build build --target install
 
-RUN test -f /lld-install/bin/lli || (echo "Error: lli not installed!" && false)
-
-# Extract list of required binaries from LLVMExports
-RUN grep -oE 'file="[^"]+/bin/[^"]+"' /lld-install/lib/cmake/llvm/LLVMExports.cmake \
-  | sed -E 's/file="([^"]+)"/\1/' \
-  | sort -u > /lld-install/bin/llvm-required-files.txt
-
 ########################################
-# Stage 3: Alpine Static Image with LLD
+# Stage 3: Main Builder
+# This stage uses the reliable system Clang and links it with our custom static LLD.
 ########################################
-FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS alpine-static
+FROM alpine:${ALPINE_VERSION} AS builder
 
-LABEL maintainer="you@example.com"
-LABEL description="Alpine ${ALPINE_VERSION} with LLD and static toolchain"
-
-COPY --from=xx /usr/bin/xx* /usr/bin/
-
-# Install bash so we can use SHELL
-RUN apk add --no-cache bash
-
-# Set bash for all future RUN commands
+COPY --from=xx / /
 SHELL ["bash", "-c"]
 
-# Install static toolchain and build dependencies
-RUN apk add --no-cache \
-    cmake \
-    samurai \
-    g++ \
-    clang \
-    llvm-static \
-    lld-dev \
-    zlib-static \
-    zlib-dev \
-    git \
+# Install host build dependencies
+RUN apk add --no-cache bash cmake samurai clang g++ git
+
+# Install TARGET dependencies into the sysroot
+# CRITICAL: We do NOT install g++ into the sysroot to avoid stdlib conflicts.
+RUN xx-apk add --no-cache \
     musl-dev \
     libc-dev \
-    libffi-dev
+    clang \
+    libc++-static \
+    libc++-dev \
+    llvm-libunwind-static \
+    zlib-static
 
-# Ensure necessary directories exist
-RUN mkdir -p /usr/lib/llvm/lib /usr/lib/cmake/llvm $(xx-info sysroot)/usr/bin
+# Copy our custom-built static LLD libraries into the sysroot for the compiler to find.
+COPY --from=lld-builder /lld-install/lib/liblld*.a $(xx-info sysroot)/usr/lib/
 
-# Copy LLVM static libraries
-COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/
-COPY --from=lld-builder /lld-install/lib/libLLVM*.a /usr/lib/llvm/lib/
-
-# Copy LLD static libraries
-COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/
-COPY --from=lld-builder /lld-install/lib/liblld*.a /usr/lib/llvm/lib/
-
-# Copy LLVM CMake config directory
-COPY --from=lld-builder /lld-install/lib/cmake/llvm /usr/lib/cmake/llvm
-
-# Copy binary list for use in copy loop
-COPY --from=lld-builder /lld-install/bin/llvm-required-files.txt /tmp/
-
-# Debug print the list of required files
-RUN echo "LLVM tools being copied:" && cat /tmp/llvm-required-files.txt
-
-# Copy required binaries listed in llvm-required-files.txt
-RUN while read -r f; do \
-      if [ -f "$f" ]; then \
-        cp "$f" /usr/bin/; \
-        if xx-info is-cross; then \
-          cp -f /usr/bin/$(basename "$f") $(xx-info sysroot)/usr/bin/$(basename "$f"); \
-        fi; \
-      fi; \
-    done < /tmp/llvm-required-files.txt
-
-# Copy libLTO shared libraries
-COPY --from=lld-builder /lld-install/lib/libLTO.so* /usr/lib/
-RUN if xx-info is-cross; then cp -f /usr/lib/libLTO.so* $(xx-info sysroot)/usr/lib/; fi
-
-# Explicitly copy lli
-COPY --from=lld-builder /lld-install/bin/lli /usr/bin/
-RUN if xx-info is-cross; then cp -f /usr/bin/lli $(xx-info sysroot)/usr/bin/lli; fi
-
-COPY --from=lld-builder /lld-install/bin/llvm-as /usr/bin/
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-as $(xx-info sysroot)/usr/bin/llvm-as; fi
-
-COPY --from=lld-builder /lld-install/bin/llvm-tblgen /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-ar /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-nm /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-ranlib /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-config /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-lto /usr/bin/
-COPY --from=lld-builder /lld-install/bin/llvm-profdata /usr/bin/
-COPY --from=lld-builder /lld-install/bin/bugpoint /usr/bin/
-
-COPY --from=lld-builder /lld-build/llvm-project/build/bin/llvm-bcanalyzer /usr/bin/
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-bcanalyzer $(xx-info sysroot)/usr/bin/llvm-bcanalyzer; fi
-# Explicitly copy llc, which may not be included in auto-discovered files
-COPY --from=lld-builder /lld-install/bin/llc /usr/bin/
-
-RUN if xx-info is-cross; then cp -f /usr/bin/llc $(xx-info sysroot)/usr/bin/llc; fi
-
-RUN if xx-info is-cross; then cp -f /usr/bin/bugpoint $(xx-info sysroot)/usr/bin/bugpoint; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-profdata $(xx-info sysroot)/usr/bin/llvm-profdata; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-lto $(xx-info sysroot)/usr/bin/llvm-lto; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-tblgen $(xx-info sysroot)/usr/bin/llvm-tblgen; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-ar $(xx-info sysroot)/usr/bin/llvm-ar; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-nm $(xx-info sysroot)/usr/bin/llvm-nm; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-ranlib $(xx-info sysroot)/usr/bin/llvm-ranlib; fi
-RUN if xx-info is-cross; then cp -f /usr/bin/llvm-config $(xx-info sysroot)/usr/bin/llvm-config; fi
-
-# Patch LLVMConfig for proper sysroot awareness
-RUN sed -i 's|/usr/lib/llvm|${CMAKE_SYSROOT}usr/lib/llvm|' $(xx-info sysroot)usr/lib/cmake/llvm*/LLVMConfig.cmake || true
-
-# Add xx-toolchain helper
-RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod +x /usr/bin/xx-toolchain
+# Create a simple, robust toolchain file.
+RUN cat <<'EOT' > /usr/bin/xx-toolchain && chmod a+x /usr/bin/xx-toolchain
 #!/bin/bash
-mkdir -p /etc/xx-toolchains/
-TOOLCHAIN_FILE="/etc/xx-toolchains/$(xx-clang --print-target-triple).cmake"
-[ -f "$TOOLCHAIN_FILE" ] || cat <<EOF > "$TOOLCHAIN_FILE"
-set(CMAKE_CROSSCOMPILING ON)
-set(CMAKE_SYSROOT "$(xx-info sysroot)")
-set(CMAKE_SYSTEM_NAME "Linux")
-set(CMAKE_SYSTEM_VERSION 1)
-set(CMAKE_SYSTEM_PROCESSOR "$(xx-info march)")
-set(CMAKE_C_COMPILER "$(which clang)")
-set(CMAKE_CXX_COMPILER "$(which clang++)")
-set(CMAKE_ASM_COMPILER "$(which clang)")
-set(CMAKE_AR "$(which ar)")
-set(CMAKE_RANLIB "$(which ranlib)")
-set(PKG_CONFIG_EXECUTABLE "$(xx-clang --print-prog-name=pkg-config)")
-set(CMAKE_C_COMPILER_TARGET "$(xx-clang --print-target-triple)")
-set(CMAKE_CXX_COMPILER_TARGET "$(xx-clang --print-target-triple)")
-set(CMAKE_ASM_COMPILER_TARGET "$(xx-clang --print-target-triple)")
+set -e
+SYSROOT=$(xx-info sysroot)
+TARGET_TRIPLE=$(xx-clang --print-target-triple)
+TOOLCHAIN_FILE="/etc/xx-toolchains/${TARGET_TRIPLE}.cmake"
+
+if [ ! -f "$TOOLCHAIN_FILE" ]; then
+    mkdir -p "$(dirname "$TOOLCHAIN_FILE")"
+    cat <<EOF > "$TOOLCHAIN_FILE"
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR "$(xx-info arch)")
+set(CMAKE_SYSROOT "${SYSROOT}")
+
+set(CMAKE_C_COMPILER "xx-clang")
+set(CMAKE_CXX_COMPILER "xx-clang++")
+set(CMAKE_AR "xx-llvm-ar")
+set(CMAKE_RANLIB "xx-llvm-ranlib")
+
+# Instruct the linker to use LLD and link everything statically.
+set(CMAKE_EXE_LINKER_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -fuse-ld=lld -static" CACHE STRING "")
 EOF
+fi
 echo "$TOOLCHAIN_FILE"
 EOT
 
-########################################
-# Stage 4: wasmedge-build
-########################################
-FROM alpine-static AS wasmedge-build
-SHELL ["bash", "-c"]
-
-ARG TARGETPLATFORM
-ARG ALPINE_VERSION
-
-WORKDIR /src
-
-RUN apk add --no-cache \
-    curl \
-    tar \
-    git \
-    ninja \
-    bash \
-    cmake \
-    zstd-dev \
-    zstd-static
-
-COPY --from=alpine-static /usr/bin/xx* /usr/bin/
-
-# Fake dsymutil for CMake sanity
-RUN ln -sf /bin/true /usr/bin/dsymutil
-
+# Configure WasmEdge
 RUN --mount=type=bind,target=/src,source=. \
     cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX="/install" \
         -DCMAKE_TOOLCHAIN_FILE="$(xx-toolchain)" \
-        -DCMAKE_PREFIX_PATH="$(xx-info sysroot)/usr/lib/cmake/llvm" \
         -DWASMEDGE_BUILD_PACKAGE="TGZ" \
         -DWASMEDGE_USE_LLVM=ON \
         -DWASMEDGE_BUILD_STATIC_LIB=ON \
@@ -240,9 +99,23 @@ RUN --mount=type=bind,target=/src,source=. \
         -DWASMEDGE_LINK_TOOLS_STATIC=ON \
         -DWASMEDGE_DISABLE_LIBTINFO=ON
 
+# Build WasmEdge
 RUN --mount=type=bind,target=/src,source=. \
     cmake --build /build -- install package
 
-WORKDIR /src
+# Rename the final package archive
+RUN --mount=type=bind,target=/src,source=. <<EOT
+    set -ex
+    WASMEDGE_VERSION="$(cd /src && git describe --match '[0-9].[0-9]*' --tag)"
+    ARCHIVE_TAG=${WASMEDGE_VERSION%%-*}-alpine${ALPINE_VERSION}_$(xx-info march)
+    mv /build/WasmEdge-*-Linux.tar.gz /build/WasmEdge-${ARCHIVE_TAG}_static.tar.gz
+EOT
 
-CMD ["/bin/bash"]
+########################################
+# Stage 4 & 5: Final packaging stages
+########################################
+FROM scratch AS install
+COPY --from=builder /install /
+
+FROM scratch AS tar
+COPY --from=builder /build/WasmEdge-*.tar.gz /
