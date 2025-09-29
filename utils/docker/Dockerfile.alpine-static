@@ -8,8 +8,8 @@ ARG ALPINE_VERSION=3.22
 FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
 
 ########################################
-# Stage 2: Build LLVM Tools (but not Clang) from Source
-# This provides static lld, llvm-tblgen, and other utilities.
+# Stage 2: Build ONLY LLD from LLVM source
+# This is much faster and avoids building an incomplete Clang.
 ########################################
 FROM alpine:${ALPINE_VERSION} AS llvm-builder
 
@@ -32,18 +32,20 @@ RUN cmake --build build --target install
 
 ########################################
 # Stage 3: WasmEdge Builder
-# This combines the stable system clang with our custom-built LLVM tools.
+# This combines the stable system Clang with our custom-built LLVM tools.
 ########################################
 FROM alpine:${ALPINE_VERSION} AS builder
 
 COPY --from=xx / /
-SHELL ["bash", "-c"]
 
-# Install HOST build dependencies, including the stable system clang.
+# FINAL FIX: Install bash first using the default /bin/sh shell.
 RUN apk add --no-cache bash cmake samurai clang g++ git llvm-dev
 
+# NOW that bash is installed, we can switch the shell.
+SHELL ["bash", "-c"]
+
 # Install TARGET dependencies into the sysroot.
-# We do NOT install g++ into the sysroot to avoid stdlib conflicts.
+# CRITICAL: We do NOT install g++ into the sysroot to avoid stdlib conflicts.
 RUN xx-apk add --no-cache \
     musl-dev \
     libc-dev \
