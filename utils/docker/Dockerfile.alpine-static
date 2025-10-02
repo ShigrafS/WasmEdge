@@ -136,8 +136,9 @@ set(CMAKE_AR "$(which xx-llvm-ar)")
 # FINAL FIX: Correct the typo from xx--llvm-ranlib to xx-llvm-ranlib
 set(CMAKE_RANLIB "$(which xx-llvm-ranlib)")
 
-# A clean toolchain setup. Clang will find the correct headers with the right sysroot and stdlib flags.
-set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -pthread -D_GNU_SOURCE -isystem \${SYSROOT}/usr/include/c++/v1 -isystem \${SYSROOT}/usr/include" CACHE STRING "C++ compiler flags")
+# FINAL FIX: Use -nostdinc++ to prevent using broken default C++ include paths.
+# Then manually add the correct paths in order.
+set(CMAKE_CXX_FLAGS "--sysroot=${SYSROOT} -stdlib=libc++ -pthread -D_GNU_SOURCE -nostdinc++ -isystem \${SYSROOT}/usr/include/c++/v1 -isystem \${SYSROOT}/usr/include" CACHE STRING "C++ compiler flags")
 set(CMAKE_C_FLAGS "--sysroot=${SYSROOT} -pthread -D_GNU_SOURCE -isystem \${SYSROOT}/usr/include" CACHE STRING "C compiler flags")
 
 # Linker flags.
@@ -166,7 +167,7 @@ ARG ALPINE_VERSION
 WORKDIR /src_writable
 SHELL ["bash", "-c"]
 
-# Host tools
+# Host build tools
 RUN apk add --no-cache \
     curl \
     tar \
@@ -177,8 +178,7 @@ RUN apk add --no-cache \
     zstd-dev \
     zstd-static
 
-# Install a clean libc++ toolchain into the sysroot.
-# Do NOT install g++, as it brings in a conflicting libstdc++ implementation.
+# Install libc++ toolchain into the sysroot (cross tool context)
 RUN xx-apk add \
     musl-dev \
     libc-dev \
@@ -187,14 +187,22 @@ RUN xx-apk add \
     libc++-dev \
     llvm-libunwind-static
 
+# DEBUG: List some key files to verify
+RUN echo "=== sysroot include listing for stdio.h and c++/v1 ===" && \
+    find $(xx-info sysroot)/usr/include -maxdepth 3 | grep stdio.h || true && \
+    find $(xx-info sysroot)/usr/include -type f | grep "c++/v1/vector" || true
+
 # Fake dsymutil for CMake sanity
 RUN ln -sf /bin/true /usr/bin/dsymutil
 
-# Sanity checks
+# Sanity presence checks
 RUN test -f "$(xx-info sysroot)/usr/include/stdlib.h" || (echo "stdlib.h not found in sysroot!" && false)
 RUN test -f "$(xx-info sysroot)/usr/include/c++/v1/vector" || (echo "libc++ headers not found in sysroot!" && false)
 
-# Copy the read-only mounted source to a writable location, then patch and build from there.
+# Debug: Inspect include paths used by the compiler
+RUN echo "=== xx-clang include search paths ===" && xx-clang -E -v -xc /dev/null
+
+# Copy source and build
 RUN --mount=type=bind,target=/src,source=.,ro \
     set -e && \
     echo "Creating a writable copy of the source code..." && \
