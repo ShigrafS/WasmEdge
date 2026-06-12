@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - master
+      - asym
       - "[0-9]+.[0-9]+.x"
     paths:
       - ".github/workflows/build.yml"
@@ -26,6 +27,7 @@ on:
   pull_request:
     branches:
       - master
+      - asym
       - "proposal/**"
       - "[0-9]+.[0-9]+.x"
     paths:

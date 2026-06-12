@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - master
+      - asym
     paths:
       - ".github/extensions.paths-filter.yml"
       - ".github/workflows/build-extensions.yml"
@@ -23,6 +24,7 @@ on:
   pull_request:
     branches:
       - master
+      - asym
       - "proposal/**"
     paths:
       - ".github/extensions.paths-filter.yml"
